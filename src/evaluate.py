@@ -6,9 +6,9 @@ from datetime import datetime, timedelta
 
 
 def evaluate_hourly(station_name, prediction, actual, plot=False):
-    actual_daily = actuals[station].resample('D').sum()
+    actual_daily = actual.resample('D').sum()
 
-    predict = predict.clip(0)
+    predict = prediction.clip(0)
     predict_daily = predict.resample('D').sum()
     
     return evaluate_daily(station_name, predict_daily, actual_daily, plot=plot)
