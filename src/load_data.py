@@ -5,6 +5,9 @@ from datetime import datetime, timedelta
 
 
 def load_discharge_gr4j_vic():
+    """
+    Loads observed discharge for GR4J-Raven and VIC from disk.
+    """
     dir = 'ObservedDischarge_GR4J+VIC'  # Read runoff observations
     data_runoff = pd.DataFrame(columns=['date','runoff', 'station'])
     for f in os.listdir(dir):
@@ -20,6 +23,9 @@ def load_discharge_gr4j_vic():
 
 
 def load_rdrs_forcings():
+    """
+    Loads RDRS gridded forcings from disk.
+    """
     forcing_variables = ['RDRS_FB_SFC', 'RDRS_FI_SFC', 'RDRS_HU_40m', 'RDRS_P0_SFC', 'RDRS_PR0_SFC', 'RDRS_TT_40m', 'RDRS_UVC_40m', 'RDRS_WDC_40m']
     rdrs_nc = nc.Dataset('RDRS_CaPA24hr_forcings_final.nc', 'r')
     
