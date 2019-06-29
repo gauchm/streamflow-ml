@@ -2,6 +2,7 @@ import pandas as pd
 import os
 import netCDF4 as nc
 from datetime import datetime, timedelta
+import pickle
 
 
 def load_discharge_gr4j_vic():
@@ -40,3 +41,32 @@ def load_rdrs_forcings():
     
     rdrs_nc.close()
     return rdrs_data
+
+
+def pickle_results(name, results):
+    """ 
+    results: 
+      a) list of (station_name, prediction, actual) or
+      b) tuple of (dict(station_name -> prediction), dict(station_name -> actual))
+    """
+    if isinstance(results, list):
+        result_list = results
+    elif isinstance(results, tuple):
+        result_list = []
+        for station, predict in results[0].items():
+            result_list.append((station, predict, results[1][station]))
+    else:
+        raise Exception('invalid result format')
+        
+    result_df = pd.DataFrame()
+    for result in result_list:
+        station, prediction, actual = result
+        df = prediction[['runoff']].rename(columns={'runoff': 'prediction'})
+        df['actual'] = actual
+        df['station'] = station
+        result_df = result_df.append(df.reset_index())
+    
+    file_name = 'pickle/{}_{}.pkl'.format(name, datetime.now().strftime('%Y%m%d-%H%M%S'))
+    pickle.dump(result_df, open(file_name, 'wb'))
+    
+    return file_name
