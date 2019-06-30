@@ -5,19 +5,18 @@ from sklearn import metrics
 from datetime import datetime, timedelta
 
 
-def evaluate_hourly(station_name, prediction, actual, clip_before_aggregate=False, plot=False):
+def evaluate_hourly(station_name, prediction, actual, plot=False):
     """
     Calculate NSE for hourly predictions by aggregating to daily predictions and then comparing to actual streamflow.
+    Returns (NSE when clipped before aggregation, NSE when clipped after aggregation).
+    Plot is always for clipping after aggregation.
     """
     actual_daily = actual.resample('D').sum()
     
-    if clip_before_aggregate:
-        predict = prediction.clip(0)
-    else:
-        predict = prediction
-    predict_daily = predict.resample('D').sum()
-    
-    return evaluate_daily(station_name, predict_daily, actual_daily, plot=plot)
+    predict_daily_clipped_before = prediction.clip(0).resample('D').sum()
+    predict_daily = prediction.resample('D').sum()
+    return (evaluate_daily(station_name, predict_daily_clipped_before, actual_daily, plot=False),
+            evaluate_daily(station_name, predict_daily, actual_daily, plot=plot))
     
 
 def evaluate_daily(station_name, prediction, actual, plot=False, writer=None):
