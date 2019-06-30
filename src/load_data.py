@@ -9,7 +9,7 @@ def load_discharge_gr4j_vic():
     """
     Loads observed discharge for GR4J-Raven and VIC from disk.
     """
-    dir = 'data/ObservedDischarge_GR4J+VIC'  # Read runoff observations
+    dir = '../data/ObservedDischarge_GR4J+VIC'  # Read runoff observations
     data_runoff = pd.DataFrame(columns=['date','runoff', 'station'])
     for f in os.listdir(dir):
         if not f.endswith('.rvt'):
@@ -28,7 +28,7 @@ def load_rdrs_forcings():
     Loads RDRS gridded forcings from disk.
     """
     forcing_variables = ['RDRS_FB_SFC', 'RDRS_FI_SFC', 'RDRS_HU_40m', 'RDRS_P0_SFC', 'RDRS_PR0_SFC', 'RDRS_TT_40m', 'RDRS_UVC_40m', 'RDRS_WDC_40m']
-    rdrs_nc = nc.Dataset('data/RDRS_CaPA24hr_forcings_final.nc', 'r')
+    rdrs_nc = nc.Dataset('../data/RDRS_CaPA24hr_forcings_final.nc', 'r')
     
     rdrs_data = pd.DataFrame(index=pd.date_range('2010-01-01 7:00', '2015-01-01 7:00', freq='H')) # Using 7:00 because forcings are UTC, while runoff is local time
     
@@ -68,9 +68,9 @@ def pickle_results(name, results, models=None):
         result_df = result_df.append(df.reset_index())
     
     file_name = '{}_{}.pkl'.format(name, datetime.now().strftime('%Y%m%d-%H%M%S'))
-    pickle.dump(result_df, open('pickle/results/' + file_name, 'wb'))
+    pickle.dump(result_df, open('../pickle/results/' + file_name, 'wb'))
     
     if models is not None:
-        pickle.dump(models, open('pickle/models/' + file_name, 'wb'))
+        pickle.dump(models, open('../pickle/models/' + file_name, 'wb'))
     
     return file_name
