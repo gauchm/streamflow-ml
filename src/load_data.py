@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import os
 import netCDF4 as nc
 from datetime import datetime, timedelta
@@ -74,3 +75,116 @@ def pickle_results(name, results, models=None):
         pickle.dump(models, open('../pickle/models/' + file_name, 'wb'))
     
     return file_name
+
+
+def load_train_test_gridded_dividedStreamflow():
+    """
+    Load train and test data from HDF5 for predictions on gridded forcings with streamflow divided into hourly data.
+    If no HDF5 file exists yet, it is created.
+    """
+    file_name = '../data/train_test/gridded_dividedStreamflow.h5'
+    if not os.path.isfile(file_name):
+        history = 7 * 24
+        data_runoff = load_discharge_gr4j_vic()
+        station_cell_mapping = get_station_cell_mapping()
+        rdrs_data = load_rdrs_forcings()
+        month_onehot = pd.get_dummies(data_runoff['date'].dt.month, prefix='month', columns=['month'])
+        data_runoff = data_runoff.join(month_onehot)
+
+        for station in data_runoff['station'].unique():
+            station_data = data_runoff[data_runoff['station'] == station].set_index('date')
+            station_cell_ids = 39 * station_cell_mapping[station_cell_mapping['station'] == station]['col'] \
+                + station_cell_mapping[station_cell_mapping['station'] == station]['row']
+            station_rdrs = rdrs_data.filter(regex='_(' + '|'.join(map(lambda x: str(x), station_cell_ids)) + ')$', axis=1)
+
+            if any(station_data['runoff'].isna()):
+                station_data = station_data[~pd.isna(station_data['runoff'])]
+                print('Station', station, 'had NA runoff values')
+
+            station_data = station_data.resample('1H').ffill()
+            station_data['runoff'] = station_data['runoff'] / 24
+            station_data = station_data.join(station_rdrs)
+            for i in range(1, history + 1):
+                station_data = station_data.join(station_rdrs.shift(i, axis=0), rsuffix='_-{}'.format(i))
+                
+            station_data.to_hdf(file_name, 'station_' + station, complevel=5)
+            
+    return read_station_data_dict(file_name)
+
+
+def load_train_test_gridded_aggregatedForcings():
+    """
+    Load train and test data from HDF5 for predictions on gridded forcings, aggregated into days.
+    If no HDF5 file exists yet, it is created.
+    """
+    file_name = '../data/train_test/gridded_aggregatedForcings.h5'
+    if not os.path.isfile(file_name):
+        history = 7
+        data_runoff = load_discharge_gr4j_vic()
+        station_cell_mapping = get_station_cell_mapping()
+        
+        rdrs_data = load_rdrs_forcings()
+        resampled = rdrs_data.resample('D')
+        rdrs_daily = resampled.sum().join(resampled.min(), lsuffix='_sum', rsuffix='_min').join(resampled.max().rename(lambda c: c + '_max', axis=1))
+        month_onehot = pd.get_dummies(data_runoff['date'].dt.month, prefix='month', columns=['month'])
+        data_runoff = data_runoff.join(month_onehot)
+        
+        for station in data_runoff['station'].unique():
+            station_data = data_runoff[data_runoff['station'] == station].set_index('date')
+            station_cell_ids = 39 * station_cell_mapping[station_cell_mapping['station'] == station]['col'] \
+                + station_cell_mapping[station_cell_mapping['station'] == station]['row']
+
+            # For temperature use min/max aggregation. Precipitation: sum. solar fluxes, pressure & humidity don't seem to help (at least with min/max/sum)
+            regex = '((RDRS_TT_40m)_({0})_(min|max)|(RDRS_PR0_SFC)_({0})_sum)$'.format('|'.join(map(lambda x: str(x), station_cell_ids)))
+            station_rdrs = rdrs_daily.filter(regex=regex, axis=1)
+            if any(station_data['runoff'].isna()):
+                station_data = station_data[~pd.isna(station_data['runoff'])]
+                print('Station', station, 'had NA runoff values')
+
+            station_data = station_data.join(station_rdrs)
+            for i in range(1, history + 1):
+                station_data = station_data.join(station_rdrs.shift(i, axis=0), rsuffix='_-{}'.format(i))
+
+            station_data.to_hdf(file_name, 'station_' + station)
+            
+    return read_station_data_dict(file_name)
+
+
+def load_train_test_lstm():
+    """
+    Load train and test data for LSTM from HDF5. If no HDF5 file exists yet, it is created.
+    """
+    file_name = '../data/train_test/lstm.h5'
+    if not os.path.isfile(file_name):
+        data_runoff = load_discharge_gr4j_vic()
+        # For each station, read which grid cells belong to its subwatershed
+        station_cell_mapping = get_station_cell_mapping()
+        rdrs_data = load_rdrs_forcings()
+
+        for station in data_runoff['station'].unique():
+            station_cell_ids = 39 * station_cell_mapping[station_cell_mapping['station'] == station]['col'] \
+                + station_cell_mapping[station_cell_mapping['station'] == station]['row']
+            station_rdrs = rdrs_data.filter(regex='_(' + '|'.join(map(lambda x: str(x), station_cell_ids)) + ')$', axis=1)
+
+            month_onehot = pd.get_dummies(station_rdrs.index.month, prefix='month')
+            month_onehot.index = station_rdrs.index
+            station_rdrs = station_rdrs.join(month_onehot)
+
+            station_rdrs.to_hdf(file_name, 'station_' + station)
+    
+    return read_station_data_dict(file_name)
+
+
+def get_station_cell_mapping():
+    """ For each station, read which grid cells belong to its subwatershed """
+    return pd.read_csv('../data/station_cell_mapping.csv', skiprows=1, names=['station', 'lat', 'lon', 'row', 'col', 'area'])
+
+
+def read_station_data_dict(file_name):
+    station_data_dict = {}
+    with pd.HDFStore(file_name,  mode='r') as store:
+        for station in store.keys():
+            station_name = station[9:]
+            station_data_dict[station_name] = store[station]
+            
+    return station_data_dict
