@@ -26,19 +26,20 @@ def evaluate_daily(station_name, prediction, actual, plot=False, writer=None):
     predict_clipped = prediction.copy()
     predict_clipped = prediction.clip(0)
     nse_clip = hydroeval.evaluator(hydroeval.nse, predict_clipped.to_numpy(), actual.to_numpy())[0]
+    mse_clip = metrics.mean_squared_error(actual.to_numpy(), predict_clipped.to_numpy())
     
     if writer is not None:
         writer.add_scalar('NSE_' + station_name, nse_clip, 0)
         f = plt.figure(figsize=(17,4))
-        plt.title(station_name + ': NSE ' + str(nse_clip))
-        plt.plot(actual, label='Test')
+        plt.title(station_name + ': NSE ' + str(nse_clip) + ', MSE: '+ str(mse_clip))
+        plt.plot(actual, label='Target')
         plt.plot(predict_clipped, label='Prediction')
         plt.legend()
         writer.add_figure(station_name, f, 0, True)
     elif plot:
         f = plt.figure(figsize=(17,4))
-        plt.title(station_name + ': NSE ' + str(nse_clip))
-        plt.plot(actual, label='Test')
+        plt.title(station_name + ': NSE ' + str(nse_clip) + ', MSE: '+ str(mse_clip))
+        plt.plot(actual, label='Target')
         plt.plot(predict_clipped, label='Prediction')
         plt.legend()
-    return nse_clip
+    return nse_clip, mse_clip

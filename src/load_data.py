@@ -4,6 +4,7 @@ import os
 import netCDF4 as nc
 from datetime import datetime, timedelta
 import pickle
+import torch
 
 
 def load_discharge_gr4j_vic():
@@ -44,12 +45,11 @@ def load_rdrs_forcings():
     return rdrs_data
 
 
-def pickle_results(name, results, models=None):
+def pickle_results(name, results, time_stamp):
     """ 
     results: 
       a) list of (station_name, prediction, actual) or
       b) tuple of (dict(station_name -> prediction), dict(station_name -> actual))
-    models: dict(station_name -> model)
     """
     if isinstance(results, list):
         result_list = results
@@ -68,13 +68,16 @@ def pickle_results(name, results, models=None):
         df['station'] = station
         result_df = result_df.append(df.reset_index())
     
-    file_name = '{}_{}.pkl'.format(name, datetime.now().strftime('%Y%m%d-%H%M%S'))
+    file_name = '{}_{}.pkl'.format(name, time_stamp)
     pickle.dump(result_df, open('../pickle/results/' + file_name, 'wb'))
     
-    if models is not None:
-        pickle.dump(models, open('../pickle/models/' + file_name, 'wb'))
-    
     return file_name
+
+
+def pickle_model(name, model, station, time_stamp):
+    file_name = '../pickle/models/{}_{}_{}.pkl'.format(name, station, time_stamp)
+    torch.save(model, file_name)
+    print('Saved model as', file_name)
 
 
 def load_train_test_gridded_dividedStreamflow():
