@@ -74,9 +74,12 @@ def pickle_results(name, results, time_stamp):
     return file_name
 
 
-def pickle_model(name, model, station, time_stamp):
+def pickle_model(name, model, station, time_stamp, torch_model=True):
     file_name = '../pickle/models/{}_{}_{}.pkl'.format(name, station, time_stamp)
-    torch.save(model, file_name)
+    if torch_model:
+        torch.save(model, file_name)
+    else:
+        pickle.dump(model, open(file_name, 'wb'))
     print('Saved model as', file_name)
 
 
