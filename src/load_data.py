@@ -79,7 +79,7 @@ def pickle_model(name, model, station, time_stamp, model_type='torch'):
     if model_type == 'torch':
         torch.save(model, file_name)
     elif model_type == 'xgb':
-        model.save_model(file_name)
+        pickle.dump(model, open(file_name, 'wb'))
     else:
         pickle.dump(model, open(file_name, 'wb'))
     print('Saved model as', file_name)
