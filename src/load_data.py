@@ -13,15 +13,17 @@ def load_discharge_gr4j_vic():
     """
     dir = '../data/ObservedDischarge_GR4J+VIC'  # Read runoff observations
     data_runoff = pd.DataFrame(columns=['date','runoff', 'station'])
+    
     for f in os.listdir(dir):
         if not f.endswith('.rvt'):
             continue
         data = pd.read_csv(os.path.join(dir, f), skiprows=2, skipfooter=1, index_col=False, header=None, names=['runoff'], na_values='-1.2345')
+        
         data['date'] = pd.date_range('2010-01-01', periods=len(data), freq='D')
         data['station'] = f[11:-4]
         data['runoff'] = data['runoff'].astype(float)
         data_runoff = data_runoff.append(data, ignore_index=True)
-        
+    
     return data_runoff
 
 
@@ -120,12 +122,18 @@ def load_train_test_gridded_dividedStreamflow():
     return read_station_data_dict(file_name)
 
 
-def load_train_test_gridded_aggregatedForcings():
+def load_train_test_gridded_aggregatedForcings(include_all_forcing_vars=False, include_all_cells=False):
     """
     Load train and test data from HDF5 for predictions on gridded forcings, aggregated into days.
     If no HDF5 file exists yet, it is created.
+    
+    if include_all_forcing_vars, will return min/max-aggregation for all variables and sum-aggregation for precipitation.
+    else, will return min/max-temperature and sum-precipitation.
+    
+    if not include_all_cells, will only return cells belonging to the station's subwatershed
     """
-    file_name = '../data/train_test/gridded_aggregatedForcings.h5'
+    file_name = '../data/train_test/gridded_aggregatedForcings{}{}.h5'.format('_all_vars' if include_all_forcing_vars else '', 
+                                                                              '_all_cells' if include_all_cells else '')
     if not os.path.isfile(file_name):
         history = 7
         data_runoff = load_discharge_gr4j_vic()
@@ -139,11 +147,17 @@ def load_train_test_gridded_aggregatedForcings():
         
         for station in data_runoff['station'].unique():
             station_data = data_runoff[data_runoff['station'] == station].set_index('date')
-            station_cell_ids = 39 * station_cell_mapping[station_cell_mapping['station'] == station]['col'] \
-                + station_cell_mapping[station_cell_mapping['station'] == station]['row']
+            if include_all_cells:
+                station_cell_ids = ['\w*']
+            else:
+                station_cell_ids = 39 * station_cell_mapping[station_cell_mapping['station'] == station]['col'] \
+                    + station_cell_mapping[station_cell_mapping['station'] == station]['row']
 
-            # For temperature use min/max aggregation. Precipitation: sum. solar fluxes, pressure & humidity don't seem to help (at least with min/max/sum)
-            regex = '((RDRS_TT_40m)_({0})_(min|max)|(RDRS_PR0_SFC)_({0})_sum)$'.format('|'.join(map(lambda x: str(x), station_cell_ids)))
+            if not include_all_forcing_vars:
+                # For temperature use min/max aggregation. Precipitation: sum. solar fluxes, pressure & humidity don't seem to help (at least with min/max/sum)
+                regex = '((RDRS_TT_40m)_({0})_(min|max)|(RDRS_PR0_SFC)_({0})_sum)$'.format('|'.join(map(lambda x: str(x), station_cell_ids)))
+            else:
+                regex = '(_({0})_(min|max)|(RDRS_PR0_SFC)_({0})_sum)$'.format('|'.join(map(lambda x: str(x), station_cell_ids)))
             station_rdrs = rdrs_daily.filter(regex=regex, axis=1)
             if any(station_data['runoff'].isna()):
                 station_data = station_data[~pd.isna(station_data['runoff'])]
@@ -153,7 +167,7 @@ def load_train_test_gridded_aggregatedForcings():
             for i in range(1, history + 1):
                 station_data = station_data.join(station_rdrs.shift(i, axis=0), rsuffix='_-{}'.format(i))
 
-            station_data.to_hdf(file_name, 'station_' + station)
+            station_data.to_hdf(file_name, 'station_' + station, complevel=5)
             
     return read_station_data_dict(file_name)
 
