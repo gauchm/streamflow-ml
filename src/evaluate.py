@@ -34,6 +34,7 @@ def evaluate_daily(station_name, prediction, actual, plot=False, writer=None):
         plt.title(station_name + ': NSE ' + str(nse_clip) + ', MSE: '+ str(mse_clip))
         plt.plot(actual, label='Target')
         plt.plot(predict_clipped, label='Prediction')
+        plt.grid()
         plt.legend()
         writer.add_figure(station_name, f, 0, True)
     elif plot:
@@ -41,5 +42,6 @@ def evaluate_daily(station_name, prediction, actual, plot=False, writer=None):
         plt.title(station_name + ': NSE ' + str(nse_clip) + ', MSE: '+ str(mse_clip))
         plt.plot(actual, label='Target')
         plt.plot(predict_clipped, label='Prediction')
+        plt.grid()
         plt.legend()
     return nse_clip, mse_clip
