@@ -1,0 +1,63 @@
+
+LinReg_VIC_divideStreamflow
+    - only use cells corresponding to the station as specified in station_cell_mapping.csv
+        - 883a96f Linear regression, clip before aggregate, without month as feature: 2014-01-01 - 2014-12-31 Median NSE .03662326056807247
+        - ccff5a8 Linear regression, clip after aggregate, without month as feature: 2014-01-01 - 2014-12-31 Median NSE .2066652344880755 
+        - 57b06ac Ridge regression, clip after aggregate, with month as feature (one-hot): 2014-01-01 - 2014-12-31 Median NSE .10814390855044054 
+            Results: pickle/LinReg_VIC_divideStreamflow_20190629-193101.pkl
+        - daefbe7 Ridge regression alpha=.5, with month as feature (one-hot): 2014-01-01 - 2014-12-31 Median NSE .18387734693758379 (clip before aggregating) / .17882368183656638 (clip after aggregating)
+            Results: pickle/LinReg_VIC_divideStreamflow_20190629-224510.pkl
+        -  Lasso regression alpha=.1, with month as feature (one-hot): 2014-01-01 - 2014-12-31 Median NSE . (clip before aggregating) / . (clip after aggregating)
+            Results: pickle/
+
+LinReg_VIC_aggregateForcings
+    - only use cells corresponding to the station as specified in station_cell_mapping.csv
+        - d477b9c Linear regression, use only min/max-temperature & sum-precipitation, without month as feature: 2014-01-01 - 2014-12-31 Median NSE .18924583402123157 
+            - other variables' min/max/sum (humidity, pressure, flux, wind) don't seem to help.
+        - 7cee8cf Ridge regression (alpha=.5), use only min/max-temperature & sum-precipitation, with month as feature: 2014-01-01 - 2014-12-31 Median NSE .24075180830375015  
+            Results: pickle/LinReg_VIC_aggregateForcings_results_20190629-175225.pkl
+            - Run again, this time storing model and results: pickle/{results, models}/LinReg_VIC_aggregateForcings_20190630-135319.pkl
+            - f6647b9 Run again, predicting 2011-2014: pickle/{results, models}/LinReg_VIC_aggregateForcings_2011-2014_20190630-153231.pkl
+        
+LSTM_VIC
+    - only use cells corresponding to the station as specified in station_cell_mapping.csv
+        - 0930d2a LSTM->LSTM->Linear, hidden layer size=100, batch_size=3, lr=3e-3, epochs=100, seq_len=7*24, without month as feature: 2014-01-01 - 2014-12-31 Median NSE .1676854054151211
+            Tensorboard: runs/Jun28_17-49-04_gra933
+        - 3678cc6 LSTM->LSTM->LSTM->Linear, hidden layer size=100, batch_size=3, lr=3e-3, epochs=300, patience=30, min_improvement=.1, seq_len=7*24, without month as feature: 2014-01-01 - 2014-12-31 Median NSE .12927122740903962 
+            Tensorboard: runs/Jun29_09-29-18_gra957, slurm-16623713.out
+        - (cancelled) LSTM->LSTM->Linear, hidden layer size=200, batch_size=3, lr=3e-3, epochs=300, patience=30, min_improvement=.1, seq_len=7*24, without month as feature: 2014-01-01 - 2014-12-31
+            Tensorboard: runs/Jun29_09-40-52_gra860, slurm-16623786.out. Cancelled, because patience=30 turned out to be too small. Follow-up: slurm-16624542.out
+        - 8a69b75 LSTM->LSTM->Linear, hidden layer size=200, batch_size=3, lr=5e-3, epochs=300, patience=50, min_improvement=.05, seq_len=7*24, without month as feature: 2014-01-01 - 2014-12-31 Median NSE .06067604061856269 
+            Tensorboard: runs/Jun29_10-08-40_gra866, slurm-16624542.out 
+            Probably learning rate too high
+        - LSTM->LSTM->Linear, hidden layer size=200, batch_size=3, lr=2e-3, epochs=300, patience=50, min_improvement=.05, seq_len=7*24, with month as feature (one-hot): 2014-01-01 - 2014-12-31 Median NSE 0.2199
+            Tensorboard: runs/Jun29_19-51-34_gra830, slurm-16632128.out, results: didn't get stored (Error when pickling: directory didn't exist)
+            - 2fc42e2 Ran again with warm-starts and corrected pickling: slurm-16652298.out runs/Jun30_14-16-44_gra874 pickle/{results, models}/LSTM_VIC_20190701-084118.pkl: 2014-01-01 - 2014-12-31 Median NSE 0.21780111197988528 
+                warm-starts did not seem to help according to loss curves.
+        - LSTM->LSTM->Linear, dropout=0.3, hidden layer size=200, batch_size=3, lr=2e-3, epochs=300, patience=50, min_improvement=.05, seq_len=7*24, with month as feature (one-hot): 2014-01-01 - 2014-12-31 Median NSE .
+            Tensorboard: runs/Jul01_14-43-51_gra932, slurm-16683093.out, killed (timeout 24h - was almost done)
+        - 50aece2 LSTM->Linear, dropout=0, hidden layer size=20, batch_size=5, lr=2e-3, weight_decay = 2e-5, epochs=300, patience=100, min_improvement=.05, monitoring validation-mse, seq_len=5*24, with month as feature (one-hot): 2014-01-01 - 2014-12-31 Median NSE .021231792280782646
+            Tensorboard: runs/Jul03_08-36-27_gra833, slurm-16746337.out, pickle/results,models/LSTM_VIC_20190703-083627.pkl
+        - running on a sample of stations, initializing hidden state before every batch (in training as well as validation and test predictions) LSTM->Linear, dropout=0, hidden layer size=20, batch_size=1, lr=2e-3, weight_decay = 2e-5, epochs=300, patience=100, min_improvement=.05, monitoring validation-mse, seq_len=5*24, with month as feature (one-hot): 2014-01-01 - 2014-12-31 Median NSE -0.06778762672811722
+            Tensorboard: runs/Jul03_13-46-23_gra937, slurm-16758972.out, pickle/results,models/LSTM_VIC_20190703-134623.pkl
+        - running on a sample of stations, without shuffling and with initializing hidden state only once before every epoch (but not between batches or before validation/test predictions). LSTM->Linear, dropout=0, hidden layer size=20, batch_size=1, lr=2e-3, weight_decay = 2e-5, epochs=300, patience=100, min_improvement=.05, monitoring validation-mse, seq_len=7*24, with month as feature (one-hot): 2014-01-01 - 2014-12-31 Median NSE .
+            Tensorboard: runs/, slurm-16771756.out, pickle/results,models/
+                
+LSTM_VIC_CV
+    - train on 2012-01 - 2012-12, predict 2013-01; ...; train on 2012-01 - 2013-11, predict 2013-12
+        slurm-16679895.out Jul01_11-32-42_gra874  killed (timeout 24h)
+    - 518bee6 with dropout, only 10 stations (to get results faster), train on 2012-01 - 2012-12, predict 2013-01&02; train on 2012-01 - 2013-02, predict 2013-03&04; ...; train on 2012-01 - 2013-10, predict 2013-11&12
+        slurm-16697523.out  Jul02_07-51-49_gra828
+        
+XGBoost_VIC
+    - 71db8bf use only min/max-temperature & sum-precipitation, with month as feature (one-hot): 2014-01-01 - 2014-12-31 Median NSE .4091496408824436
+            Results: pickle/results/XGBoost_VIC_aggregateForcings_20190703-093045.pkl pickle/models/XGBoost_VIC_aggregateForcings_{station}_20190703-093045.pkl
+    - 259c53b RandomSearchCV, use only min/max-temperature & sum-precipitation, with month as feature (one-hot): 2014-01-01 - 2014-12-31 Median NSE .43501313074535514 
+            Results: pickle/results,models/XGBoost_VIC_aggregateForcings_20190704-150411.pkl
+            - 49b91b2 run again, using all forcing variables: 2014-01-01 - 2014-12-31 Median NSE .3671441045593046  pickle/results,models/XGBoost_VIC_aggregateForcings_20190705-084937.pkl
+            - 2d94c1b run again, with test period 2013+2014 (only min/max-temp+sum-precp+month-onehot): 2013-01-01 - 2014-12-31 Median NSE: .5222957762280172 pickle/results,models/XGBoost_VIC_aggregateForcings_20190706-082538.pkl
+                - run again, with all forcing vars: 2013-01-01 - 2014-12-31 Median NSE: .4671021362093697 pickle/results,models/XGBoost_VIC_aggregateForcings_20190706-115444.pkl
+
+XGBoost_VIC_CV
+    - dd99fc4 Use model parameters found in 259c53b and do CV to obtain one median NSE per year. NSE 2010: .3016653537016454, 2011: .48630642833492554, 2012: .17389750812778548, 2013: .5805734607325083, 2014: .4297931994544186
+        Results: pickle/results,models/XGBoost_VIC_aggregateForcings_CV_20190705-083405.pkl
