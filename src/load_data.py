@@ -53,22 +53,26 @@ def pickle_results(name, results, time_stamp):
       a) list of (station_name, prediction, actual) or
       b) tuple of (dict(station_name -> prediction), dict(station_name -> actual))
     """
+    result_df = None
     if isinstance(results, list):
         result_list = results
     elif isinstance(results, tuple):
         result_list = []
         for station, predict in results[0].items():
             result_list.append((station, predict, results[1][station]))
+    elif isinstance(results, pd.DataFrame):
+        result_df = results
     else:
         raise Exception('invalid result format')
         
-    result_df = pd.DataFrame()
-    for result in result_list:
-        station, prediction, actual = result
-        df = prediction[['runoff']].rename(columns={'runoff': 'prediction'})
-        df['actual'] = actual
-        df['station'] = station
-        result_df = result_df.append(df.reset_index())
+    if result_df is None:
+        result_df = pd.DataFrame()
+        for result in result_list:
+            station, prediction, actual = result
+            df = prediction[['runoff']].rename(columns={'runoff': 'prediction'})
+            df['actual'] = actual
+            df['station'] = station
+            result_df = result_df.append(df.reset_index())
     
     file_name = '{}_{}.pkl'.format(name, time_stamp)
     pickle.dump(result_df, open('../pickle/results/' + file_name, 'wb'))
