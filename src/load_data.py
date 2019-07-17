@@ -27,24 +27,35 @@ def load_discharge_gr4j_vic():
     return data_runoff
 
 
-def load_rdrs_forcings():
+def load_rdrs_forcings(as_grid=False):
     """
-    Loads RDRS gridded forcings from disk.
+    Loads RDRS gridded forcings from disk. 
+    If not as_grid, will flatten rows and columns into columns. 
+    Else, will return tuple (array of shape (#timesteps, #vars, #rows, #cols), list of variable names, date range of length #timesteps)
     """
     forcing_variables = ['RDRS_FB_SFC', 'RDRS_FI_SFC', 'RDRS_HU_40m', 'RDRS_P0_SFC', 'RDRS_PR0_SFC', 'RDRS_TT_40m', 'RDRS_UVC_40m', 'RDRS_WDC_40m']
     rdrs_nc = nc.Dataset('../data/RDRS_CaPA24hr_forcings_final.nc', 'r')
     
-    rdrs_data = pd.DataFrame(index=pd.date_range('2010-01-01 7:00', '2015-01-01 7:00', freq='H')) # Using 7:00 because forcings are UTC, while runoff is local time
-    
-    for var in forcing_variables:
-        var_data = pd.DataFrame(rdrs_nc[var][:].reshape(43825,34*39))
-        var_data.columns = [var + '_' + str(c) for c in var_data.columns]
-        rdrs_data.reset_index(drop=True, inplace=True)
-        rdrs_data = rdrs_data.reset_index(drop=True).join(var_data.reset_index(drop=True))
-    rdrs_data.index = pd.date_range('2010-01-01 7:00', '2015-01-01 7:00', freq='H')
-    
-    rdrs_nc.close()
-    return rdrs_data
+    if as_grid:
+        time_steps, nrows, ncols = rdrs_nc[forcing_variables[0]].shape
+        rdrs_data = np.zeros((time_steps, len(forcing_variables), nrows, ncols))
+        for i in range(len(forcing_variables)):
+            rdrs_data[:,i,:,:] = rdrs_nc[forcing_variables[i]][:]
+        
+        rdrs_nc.close()
+        return rdrs_data, forcing_variables, pd.Series(pd.date_range('2010-01-01 7:00', '2015-01-01 7:00', freq='H'))
+    else:
+        rdrs_data = pd.DataFrame(index=pd.date_range('2010-01-01 7:00', '2015-01-01 7:00', freq='H')) # Using 7:00 because forcings are UTC, while runoff is local time
+
+        for var in forcing_variables:
+            var_data = pd.DataFrame(rdrs_nc[var][:].reshape(43825,34*39))
+            var_data.columns = [var + '_' + str(c) for c in var_data.columns]
+            rdrs_data.reset_index(drop=True, inplace=True)
+            rdrs_data = rdrs_data.reset_index(drop=True).join(var_data.reset_index(drop=True))
+        rdrs_data.index = pd.date_range('2010-01-01 7:00', '2015-01-01 7:00', freq='H')
+
+        rdrs_nc.close()
+        return rdrs_data
 
 
 def pickle_results(name, results, time_stamp):
