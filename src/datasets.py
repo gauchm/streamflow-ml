@@ -2,10 +2,10 @@ import numpy as np
 import pandas as pd
 from sklearn import preprocessing
 import torch
+from torch.utils.data import Dataset
 from src import load_data
-from torch import utils
 
-class RdrsDataset(utils.data.dataset.Dataset):
+class RdrsDataset(Dataset):
     def __init__(self, rdrs_vars, seq_len, seq_steps, date_start, date_end, conv_scalers=None, fc_scalers=None):
         self.date_start = date_start
         self.date_end = date_end

@@ -4,12 +4,6 @@ import torch.nn as nn
 from torch.autograd import Variable
 import torch
 
-USE_CUDA = False
-if torch.cuda.is_available():
-    print('CUDA Available')
-    USE_CUDA = True
-device = torch.device('cuda' if USE_CUDA else 'cpu')
-
 
 class ConvLSTMCell(nn.Module):
 
@@ -65,9 +59,9 @@ class ConvLSTMCell(nn.Module):
         
         return h_next, c_next
 
-    def init_hidden(self, batch_size):
-        return (Variable(torch.zeros(batch_size, self.hidden_dim, self.height, self.width)).to(device),
-                Variable(torch.zeros(batch_size, self.hidden_dim, self.height, self.width)).to(device))
+    def init_hidden(self, batch_size, device):
+        return (torch.zeros(batch_size, self.hidden_dim, self.height, self.width, device=device),
+                torch.zeros(batch_size, self.hidden_dim, self.height, self.width, device=device))
 
 
 class ConvLSTM(nn.Module):
@@ -144,7 +138,7 @@ class ConvLSTM(nn.Module):
         cur_layer_input = input_tensor
         
         for layer_idx in range(self.num_layers):
-            h, c = self.cell_list[2 * layer_idx].init_hidden(input_tensor.size(0))
+            h, c = self.cell_list[2 * layer_idx].init_hidden(input_tensor.size(0), input_tensor.device)
             output_inner = []
             for t in range(seq_len):
 
