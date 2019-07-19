@@ -17,12 +17,12 @@ def load_discharge_gr4j_vic():
     for f in os.listdir(dir):
         if not f.endswith('.rvt'):
             continue
-        data = pd.read_csv(os.path.join(dir, f), skiprows=2, skipfooter=1, index_col=False, header=None, names=['runoff'], na_values='-1.2345')
+        data = pd.read_csv(os.path.join(dir, f), skiprows=2, skipfooter=1, index_col=False, header=None, names=['runoff'], na_values='-1.2345', engine='python')
         
         data['date'] = pd.date_range('2010-01-01', periods=len(data), freq='D')
         data['station'] = f[11:-4]
         data['runoff'] = data['runoff'].astype(float)
-        data_runoff = data_runoff.append(data, ignore_index=True)
+        data_runoff = data_runoff.append(data, ignore_index=True, sort=True)
     
     return data_runoff
 

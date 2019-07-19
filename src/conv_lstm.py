@@ -183,11 +183,11 @@ class ConvLSTM(nn.Module):
 
     
 class ConvLSTMRegression(nn.Module):
-    def __init__(self, conv_input_size, fc_input_size, batch_size, conv_input_dim, conv_hidden_dim, 
-                 kernel_size, num_conv_layers, dropout, num_fc_hidden_layers, fc_hidden_dim, pooling):
+    def __init__(self, conv_input_size, fc_input_size, conv_input_dim, conv_hidden_dim, kernel_size, 
+                 num_conv_layers, dropout, num_fc_hidden_layers, fc_hidden_dim, pooling, batch_first=False):
         super(ConvLSTMRegression, self).__init__()
-        self.batch_size = batch_size
-        self.conv_lstm = ConvLSTM(conv_input_size, conv_input_dim, conv_hidden_dim, kernel_size, num_conv_layers, pooling=pooling)
+        self.conv_lstm = ConvLSTM(conv_input_size, conv_input_dim, conv_hidden_dim, kernel_size, 
+                                  num_conv_layers, pooling=pooling, batch_first=batch_first)
         self.dropout = nn.Dropout2d(p=dropout)
         self.pooling = pooling
         
@@ -197,15 +197,17 @@ class ConvLSTMRegression(nn.Module):
             if pooling[i]:
                 conv_out_height -= 2 * (kernel_size[0] // 2)
                 conv_out_width -= 2 * (kernel_size[1] // 2)
+        conv_out_dim = conv_hidden_dim[-1] if isinstance(conv_hidden_dim, list) else conv_hidden_dim
         
         self.fully_connected = nn.Sequential(
-            *([nn.Linear(conv_hidden_dim * conv_out_height * conv_out_width + fc_input_size, fc_hidden_dim)] \
+            *([nn.Linear(conv_out_dim * conv_out_height * conv_out_width + fc_input_size, fc_hidden_dim)] \
                 + [nn.Sequential(nn.ReLU(), nn.Linear(fc_hidden_dim, fc_hidden_dim)) for _ in range(num_fc_hidden_layers - 1)] \
                 + [nn.Sequential(nn.ReLU(), nn.Linear(fc_hidden_dim, 1))]))
 
     def forward(self, conv_input, fc_input):
+        batch_size = fc_input.shape[0]
         lstm_out, hidden = self.conv_lstm(conv_input)
-        fc_in_conv = self.dropout(lstm_out[-1][:,-1,:,:,:]).reshape((self.batch_size, -1))
+        fc_in_conv = self.dropout(lstm_out[-1][:,-1,:,:,:]).reshape((batch_size, -1))
         fc_in = torch.cat([fc_in_conv, fc_input], dim=1)
         
         return self.fully_connected(fc_in)
