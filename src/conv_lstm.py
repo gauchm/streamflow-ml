@@ -116,8 +116,9 @@ class ConvLSTM(nn.Module):
         ----------
         input_tensor: todo 
             5-D Tensor either of shape (t, b, c, h, w) or (b, t, c, h, w)
-        hidden_state: todo
-            None. todo implement stateful
+        hidden_state: list or None
+            If list of (h,c)-tuples, will use as LSTM states for the LSTM layers. 
+            If None, will initialize states on each batch.
             
         Returns
         -------
@@ -127,9 +128,12 @@ class ConvLSTM(nn.Module):
             # (t, b, c, h, w) -> (b, t, c, h, w)
             input_tensor = input_tensor.permute(1, 0, 2, 3, 4)
 
-        # Implement stateful ConvLSTM
+        hidden_states = []
         if hidden_state is not None:
-            raise NotImplementedError()
+            hidden_states = hidden_state
+        else:
+            for layer_idx in range(self.num_layers):
+                hidden_states.append(self.cell_list[2 * layer_idx].init_hidden(input_tensor.size(0), input_tensor.device))
         
         layer_output_list = []
         last_state_list   = []
@@ -138,7 +142,7 @@ class ConvLSTM(nn.Module):
         cur_layer_input = input_tensor
         
         for layer_idx in range(self.num_layers):
-            h, c = self.cell_list[2 * layer_idx].init_hidden(input_tensor.size(0), input_tensor.device)
+            h, c = hidden_states[layer_idx]
             output_inner = []
             for t in range(seq_len):
 
@@ -149,17 +153,12 @@ class ConvLSTM(nn.Module):
             layer_output = torch.stack(output_inner, dim=1)
             cur_layer_input = layer_output
 
+            last_state_list.append((h.detach(), c.detach()))  # detach to stop BPTT between batches
             if self.return_all_layers | (layer_idx == 0):
                 layer_output_list.append(layer_output)
-                last_state_list.append([h, c])
             else:
                 # Save memory if we will only need the last output anyways
                 layer_output_list[0] = layer_output
-                last_state_list[0] = [h, c]
-
-        if not self.return_all_layers:
-            layer_output_list = layer_output_list[-1:]
-            last_state_list   = last_state_list[-1:]
 
         return layer_output_list, last_state_list
 
@@ -203,10 +202,10 @@ class ConvLSTMRegression(nn.Module):
             raise ValueError('invalid num_fc_layers')
         self.fully_connected = nn.Sequential(*fc_layers)
 
-    def forward(self, conv_input, fc_input):
+    def forward(self, conv_input, fc_input, conv_hidden_states=None):
         batch_size = fc_input.shape[0]
-        lstm_out, hidden = self.conv_lstm(conv_input)
+        lstm_out, hidden = self.conv_lstm(conv_input, hidden_state=conv_hidden_states)
         fc_in_conv = self.dropout(lstm_out[-1][:,-1,:,:,:]).reshape((batch_size, -1))
         fc_in = torch.cat([fc_in_conv, fc_input], dim=1)
         
-        return self.fully_connected(fc_in)
+        return self.fully_connected(fc_in), hidden

@@ -23,25 +23,27 @@ class RdrsDataset(Dataset):
         
         data_runoff = load_data.load_discharge_gr4j_vic()
         data_runoff = data_runoff[~pd.isna(data_runoff['runoff'])]
+        data_runoff = data_runoff.join(pd.get_dummies(data_runoff['date'].dt.month, prefix='month'))
         data_runoff = data_runoff[(data_runoff['date'] >= self.date_start) & (data_runoff['date'] <= self.date_end)]
         gauge_info = pd.read_csv('../data/gauge_info.csv')[['ID', 'Lat', 'Lon']]
         data_runoff = pd.merge(data_runoff, gauge_info, left_on='station', right_on='ID').drop('ID', axis=1)
-        data_runoff = data_runoff.sort_values(by='date').reset_index(drop='True')
-        data_runoff = data_runoff.join(pd.get_dummies(data_runoff['date'].dt.month, prefix='month'))
+        
+        # sort by date then station so that consecutive values have increasing dates (except for station cutoffs)
+        # this way, a stateful lstm can be fed date ranges.
+        data_runoff = data_runoff.sort_values(by=['station', 'date']).reset_index(drop='True')
         self.data_runoff = data_runoff[['date', 'station', 'runoff']]
         
         # conv input shape: (samples, seq_len, variables, height, width)
         # But: x_conv is the same for all stations for the same date, so we only generate #dates samples 
         #      and feed them multiple times (as many times as we have stations for that date)
-        self.x_conv = np.zeros((len(data_runoff['date'].unique()), seq_len, self.n_conv_vars, self.conv_height, self.conv_width))
-        i = 0        
-        for date in data_runoff['date'].unique():
+        self.x_conv = np.zeros((len(data_runoff['date'].unique()), seq_len, self.n_conv_vars, self.conv_height, self.conv_width))       
+        self.dates = np.sort(data_runoff['date'].unique())
+        i = 0
+        for date in self.dates:
             # For each day that is to be predicted, cut out a sequence that ends with that day's 23:00 and is seq_len long
             end_of_day_index = rdrs_time_index[rdrs_time_index == date].index.values[0] + 23
             self.x_conv[i,:,:,:,:] = rdrs_data[end_of_day_index - (self.seq_len * self.seq_steps) : end_of_day_index : self.seq_steps]
-            self.samples_per_date.append((data_runoff['date'] == date).sum())
             i += 1
-        self.samples_per_date = np.array(self.samples_per_date)
 
         # Scale training data
         if self.conv_scalers is None:
@@ -62,8 +64,8 @@ class RdrsDataset(Dataset):
         self.y = torch.from_numpy(data_runoff['runoff'].to_numpy()).float()
         
     def __getitem__(self, index):
-        cumulative_samples_per_date = self.samples_per_date.cumsum()
-        x_conv_index = (cumulative_samples_per_date <= index).argmin()
+        date_of_index = self.data_runoff.iloc[index]['date']
+        x_conv_index = np.argmax(self.dates == date_of_index)
         
         return {'x_conv': self.x_conv[x_conv_index,:,:,:,:], 
                 'x_fc': self.x_fc[index,:],
@@ -71,3 +73,23 @@ class RdrsDataset(Dataset):
     
     def __len__(self):
         return self.y.shape[0]
+    
+    
+class StatefulBatchSampler(torch.utils.data.Sampler):
+    def __init__(self, data_source, batch_size):
+        self.batch_size = batch_size
+        self.num_batches = len(data_source) // batch_size
+        
+        if len(data_source) % batch_size != 0:
+            print('Warning: Data source length not divisible by batch_size')
+        
+    def __iter__(self):
+        batch = []
+        for i in range(self.num_batches):
+            for j in range(self.batch_size):
+                batch.append(i + j * self.num_batches)
+            yield batch
+            batch = []
+        
+    def __len__(self):
+        return self.num_batches
