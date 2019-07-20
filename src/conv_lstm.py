@@ -178,7 +178,7 @@ class ConvLSTM(nn.Module):
     
 class ConvLSTMRegression(nn.Module):
     def __init__(self, conv_input_size, fc_input_size, conv_input_dim, conv_hidden_dim, kernel_size, 
-                 num_conv_layers, dropout, num_fc_hidden_layers, fc_hidden_dim, pooling, batch_first=False):
+                 num_conv_layers, dropout, num_fc_layers, fc_hidden_dim, pooling, batch_first=False):
         super(ConvLSTMRegression, self).__init__()
         self.conv_lstm = ConvLSTM(conv_input_size, conv_input_dim, conv_hidden_dim, kernel_size, 
                                   num_conv_layers, pooling=pooling, batch_first=batch_first)
@@ -193,10 +193,15 @@ class ConvLSTMRegression(nn.Module):
                 conv_out_width -= 2 * (kernel_size[1] // 2)
         conv_out_dim = conv_hidden_dim[-1] if isinstance(conv_hidden_dim, list) else conv_hidden_dim
         
-        self.fully_connected = nn.Sequential(
-            *([nn.Linear(conv_out_dim * conv_out_height * conv_out_width + fc_input_size, fc_hidden_dim)] \
-                + [nn.Sequential(nn.ReLU(), nn.Linear(fc_hidden_dim, fc_hidden_dim)) for _ in range(num_fc_hidden_layers - 1)] \
-                + [nn.Sequential(nn.ReLU(), nn.Linear(fc_hidden_dim, 1))]))
+        if num_fc_layers > 1:
+            fc_layers = [nn.Linear(conv_out_dim * conv_out_height * conv_out_width + fc_input_size, fc_hidden_dim)] \
+                        + [nn.Sequential(nn.ReLU(), nn.Linear(fc_hidden_dim, fc_hidden_dim)) for _ in range(num_fc_layers - 2)] \
+                        + [nn.Sequential(nn.ReLU(), nn.Linear(fc_hidden_dim, 1))]
+        elif num_fc_layers == 1:
+            fc_layers = [nn.Linear(conv_out_dim * conv_out_height * conv_out_width + fc_input_size, 1)]
+        else:
+            raise ValueError('invalid num_fc_layers')
+        self.fully_connected = nn.Sequential(*fc_layers)
 
     def forward(self, conv_input, fc_input):
         batch_size = fc_input.shape[0]
