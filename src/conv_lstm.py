@@ -194,8 +194,8 @@ class ConvLSTMRegression(nn.Module):
         
         if num_fc_layers > 1:
             fc_layers = [nn.Linear(conv_out_dim * conv_out_height * conv_out_width + fc_input_size, fc_hidden_dim)] \
-                        + [nn.Sequential(nn.ReLU(), nn.Linear(fc_hidden_dim, fc_hidden_dim)) for _ in range(num_fc_layers - 2)] \
-                        + [nn.Sequential(nn.ReLU(), nn.Linear(fc_hidden_dim, 1))]
+                        + [nn.Sequential(nn.Sigmoid(), nn.Linear(fc_hidden_dim, fc_hidden_dim)) for _ in range(num_fc_layers - 2)] \
+                        + [nn.Sequential(nn.Sigmoid(), nn.Linear(fc_hidden_dim, 1))]
         elif num_fc_layers == 1:
             fc_layers = [nn.Linear(conv_out_dim * conv_out_height * conv_out_width + fc_input_size, 1)]
         else:

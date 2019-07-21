@@ -19,12 +19,13 @@ def evaluate_hourly(station_name, prediction, actual, plot=False):
             evaluate_daily(station_name, predict_daily, actual_daily, plot=plot))
     
 
-def evaluate_daily(station_name, prediction, actual, plot=False, writer=None):
+def evaluate_daily(station_name, prediction, actual, plot=False, writer=None, clip=True):
     """
     Calculate NSE for daily streamflow prediction. If `writer` is not None, will write plot to tensorboard.
     """
     predict_clipped = prediction.copy()
-    predict_clipped = prediction.clip(0)
+    if clip:
+        predict_clipped = prediction.clip(0)
     nse_clip = hydroeval.evaluator(hydroeval.nse, predict_clipped.to_numpy(), actual.to_numpy())[0]
     mse_clip = metrics.mean_squared_error(actual.to_numpy(), predict_clipped.to_numpy())
     
