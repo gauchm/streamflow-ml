@@ -177,7 +177,7 @@ class ConvLSTM(nn.Module):
     
 class ConvLSTMRegression(nn.Module):
     def __init__(self, conv_input_size, fc_input_size, conv_input_dim, conv_hidden_dim, kernel_size, 
-                 num_conv_layers, dropout, num_fc_layers, fc_hidden_dim, pooling, batch_first=False):
+                 num_conv_layers, dropout, num_fc_layers, fc_hidden_dim, pooling, batch_first=False, fc_activation=nn.Sigmoid):
         super(ConvLSTMRegression, self).__init__()
         self.conv_lstm = ConvLSTM(conv_input_size, conv_input_dim, conv_hidden_dim, kernel_size, 
                                   num_conv_layers, pooling=pooling, batch_first=batch_first)
@@ -194,8 +194,8 @@ class ConvLSTMRegression(nn.Module):
         
         if num_fc_layers > 1:
             fc_layers = [nn.Linear(conv_out_dim * conv_out_height * conv_out_width + fc_input_size, fc_hidden_dim)] \
-                        + [nn.Sequential(nn.Sigmoid(), nn.Linear(fc_hidden_dim, fc_hidden_dim)) for _ in range(num_fc_layers - 2)] \
-                        + [nn.Sequential(nn.Sigmoid(), nn.Linear(fc_hidden_dim, 1))]
+                        + [nn.Sequential(fc_activation(), nn.Linear(fc_hidden_dim, fc_hidden_dim)) for _ in range(num_fc_layers - 2)] \
+                        + [nn.Sequential(fc_activation(), nn.Linear(fc_hidden_dim, 1))]
         elif num_fc_layers == 1:
             fc_layers = [nn.Linear(conv_out_dim * conv_out_height * conv_out_width + fc_input_size, 1)]
         else:
@@ -209,3 +209,41 @@ class ConvLSTMRegression(nn.Module):
         fc_in = torch.cat([fc_in_conv, fc_input], dim=1)
         
         return self.fully_connected(fc_in), hidden
+    
+    
+class ConvLSTMLSTMRegression(nn.Module):
+    def __init__(self, conv_input_size, lstm_input_size, conv_input_dim, conv_hidden_dim, kernel_size, 
+                 num_conv_layers, dropout, num_lstm_layers, lstm_hidden_dim, pooling):
+        super(ConvLSTMLSTMRegression, self).__init__()
+        self.conv_lstm = ConvLSTM(conv_input_size, conv_input_dim, conv_hidden_dim, kernel_size, 
+                                  num_conv_layers, pooling=pooling, batch_first=True)
+        self.dropout = nn.Dropout2d(p=dropout)
+        self.pooling = pooling
+        self.num_lstm_layers = num_lstm_layers
+        self.lstm_hidden_dim = lstm_hidden_dim
+        
+        conv_out_height = conv_input_size[0]
+        conv_out_width = conv_input_size[1]
+        for i in range(num_conv_layers):
+            if pooling[i]:
+                conv_out_height -= 2 * (kernel_size[0] // 2)
+                conv_out_width -= 2 * (kernel_size[1] // 2)
+        conv_out_dim = conv_hidden_dim[-1] if isinstance(conv_hidden_dim, list) else conv_hidden_dim
+        
+        self.lstm = nn.LSTM(conv_out_dim * conv_out_height * conv_out_width + lstm_input_size, lstm_hidden_dim, num_lstm_layers, batch_first=True)
+        self.linear = nn.Linear(lstm_hidden_dim, 1)
+
+    def forward(self, conv_input, lstm_input, conv_hidden_states=None, lstm_hidden_states=None):
+        batch_size = lstm_input.shape[0]
+        conv_out, conv_hidden = self.conv_lstm(conv_input, hidden_state=conv_hidden_states)
+        
+        lstm_in_conv = self.dropout(conv_out[-1][:,:,:,:,:]).reshape((batch_size, conv_out[-1].shape[1], -1))
+        lstm_in = torch.cat([lstm_in_conv, torch.unsqueeze(lstm_input, 1).repeat(1,lstm_in_conv.shape[1],1)], dim=2)
+        
+        if lstm_hidden_states is None:
+            lstm_hidden = (torch.zeros(self.num_lstm_layers, batch_size, self.lstm_hidden_dim).to(lstm_input.device),
+                           torch.zeros(self.num_lstm_layers, batch_size, self.lstm_hidden_dim).to(lstm_input.device))
+        else:
+            lstm_hidden = lstm_hidden_states
+        lstm_out, lstm_hidden = self.lstm(lstm_in, lstm_hidden)
+        return self.linear(lstm_out[:,-1,:]), conv_hidden, lstm_hidden

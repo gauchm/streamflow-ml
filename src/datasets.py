@@ -6,7 +6,7 @@ from torch.utils.data import Dataset
 from src import load_data
 
 class RdrsDataset(Dataset):
-    def __init__(self, rdrs_vars, seq_len, seq_steps, date_start, date_end, conv_scalers=None, fc_scalers=None):
+    def __init__(self, rdrs_vars, seq_len, seq_steps, date_start, date_end, conv_scalers=None, fc_scalers=None, include_months=True):
         self.date_start = date_start
         self.date_end = date_end
         self.seq_len = seq_len
@@ -23,7 +23,8 @@ class RdrsDataset(Dataset):
         
         data_runoff = load_data.load_discharge_gr4j_vic()
         data_runoff = data_runoff[~pd.isna(data_runoff['runoff'])]
-        data_runoff = data_runoff.join(pd.get_dummies(data_runoff['date'].dt.month, prefix='month'))
+        if include_months:
+            data_runoff = data_runoff.join(pd.get_dummies(data_runoff['date'].dt.month, prefix='month'))
         data_runoff = data_runoff[(data_runoff['date'] >= self.date_start) & (data_runoff['date'] <= self.date_end)]
         gauge_info = pd.read_csv('../data/gauge_info.csv')[['ID', 'Lat', 'Lon']]
         data_runoff = pd.merge(data_runoff, gauge_info, left_on='station', right_on='ID').drop('ID', axis=1)
@@ -53,11 +54,15 @@ class RdrsDataset(Dataset):
                                                    .reshape(self.x_conv[:,:,i,:,:].shape))
 
         self.x_fc = data_runoff.drop(['date', 'station', 'runoff'], axis=1).to_numpy()
-        self.n_fc_vars = self.x_fc.shape[1]
+        fc_var_names = data_runoff.drop(['date', 'station', 'runoff'], axis=1).columns
+        vars_to_scale = list(c for c in fc_var_names if not c.startswith('month'))
+        self.n_fc_vars = len(fc_var_names)
         if self.fc_scalers is None:
-            self.fc_scalers = list(preprocessing.StandardScaler() for _ in range(self.x_fc.shape[1]))
+            self.fc_scalers = list(preprocessing.StandardScaler() for _ in range(self.n_fc_vars))
         for i in range(self.n_fc_vars):
-            self.x_fc[:,i] = np.nan_to_num(self.fc_scalers[i].fit_transform(self.x_fc[:,i].reshape((-1,1))).reshape(self.x_fc[:,i].shape))
+            if fc_var_names[i] in vars_to_scale:
+                to_transform = data_runoff[fc_var_names[i]].to_numpy().reshape((-1,1))
+                self.x_fc[:,i] = np.nan_to_num(self.fc_scalers[i].fit_transform(to_transform).reshape(self.x_fc[:,i].shape))
         
         self.x_conv = torch.from_numpy(self.x_conv).float()
         self.x_fc = torch.from_numpy(self.x_fc).float()
