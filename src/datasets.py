@@ -98,3 +98,76 @@ class StatefulBatchSampler(torch.utils.data.Sampler):
         
     def __len__(self):
         return self.num_batches
+
+    
+class RdrsGridDataset(Dataset):
+    """ RDRS dataset where target is a spatial grid of streamflow values """
+    def __init__(self, rdrs_vars, seq_len, seq_steps, date_start, date_end, conv_scalers=None):
+        self.date_start = date_start
+        self.date_end = date_end
+        self.seq_len = seq_len
+        self.seq_steps = seq_steps
+        self.conv_scalers = conv_scalers
+        
+        rdrs_data, rdrs_var_names, rdrs_time_index, lats, lons = load_data.load_rdrs_forcings(as_grid=True, include_lat_lon=True)
+        rdrs_data = rdrs_data[:,rdrs_vars,:,:]
+        self.n_conv_vars = len(rdrs_vars)
+        self.conv_height = rdrs_data.shape[2]
+        self.conv_width = rdrs_data.shape[3]
+        
+        data_runoff = load_data.load_discharge_gr4j_vic()
+        data_runoff = data_runoff[~pd.isna(data_runoff['runoff'])]
+        data_runoff = data_runoff[(data_runoff['date'] >= self.date_start) & (data_runoff['date'] <= self.date_end)]
+        gauge_info = pd.read_csv('../data/gauge_info.csv')[['ID', 'Lat', 'Lon']]
+        data_runoff = pd.merge(data_runoff, gauge_info, left_on='station', right_on='ID').drop('ID', axis=1)
+        
+        data_runoff = data_runoff.sort_values(by=['date']).reset_index(drop='True')
+        self.data_runoff = data_runoff[['date', 'station', 'runoff']]
+        
+        # get station to (row, col) mapping
+        self.station_to_index = {}
+        for station in data_runoff['station'].unique():
+            station_lat = data_runoff[data_runoff['station'] == station]['Lat'].values[0]
+            station_lon = data_runoff[data_runoff['station'] == station]['Lon'].values[0]
+            # find nearest cell
+            station_idx = np.argmin(np.square(lats - station_lat) + np.square(lons - station_lon))
+            station_row = station_idx // rdrs_data.shape[3]
+            station_col = station_idx % rdrs_data.shape[3]
+            self.station_to_index[station] = (station_row, station_col)
+        
+        # conv input shape: (samples, seq_len, variables, height, width)
+        self.x_conv = np.zeros((len(data_runoff['date'].unique()), seq_len, self.n_conv_vars, self.conv_height, self.conv_width))       
+        self.dates = np.sort(data_runoff['date'].unique())
+        i = 0
+        for date in self.dates:
+            # For each day that is to be predicted, cut out a sequence that ends with that day's 23:00 and is seq_len long
+            end_of_day_index = rdrs_time_index[rdrs_time_index == date].index.values[0] + 23
+            self.x_conv[i,:,:,:,:] = rdrs_data[end_of_day_index - (self.seq_len * self.seq_steps) : end_of_day_index : self.seq_steps]
+            i += 1
+
+        # Scale training data
+        if self.conv_scalers is None:
+            self.conv_scalers = list(preprocessing.StandardScaler() for _ in range(self.x_conv.shape[2]))
+        for i in range(self.n_conv_vars):
+            self.x_conv[:,:,i,:,:] = np.nan_to_num(self.conv_scalers[i].fit_transform(self.x_conv[:,:,i,:,:].reshape((-1, 1)))
+                                                   .reshape(self.x_conv[:,:,i,:,:].shape))
+
+        self.x_conv = torch.from_numpy(self.x_conv).float()
+        # Create a tensor of shape (#days, height, width) of target values (only those cells where we have stations get populated)
+        self.y = torch.zeros((len(self.dates), self.conv_height, self.conv_width))
+        self.mask = torch.zeros((len(self.dates), self.conv_height, self.conv_width))
+        self.station_to_row_col = {}
+        for station in data_runoff['station'].unique():
+            row, col = self.station_to_index[station]
+            self.station_to_row_col[station] = (row, col)
+            station_runoff = data_runoff[data_runoff['station']==station].set_index('date')
+            for i in range(len(self.dates)):
+                if self.dates[i] in station_runoff.index:
+                    self.mask[i, row, col] = 1
+                    self.y[i, row, col] = station_runoff.loc[self.dates[i], 'runoff']
+        
+    def __getitem__(self, index):
+        return {'x_conv': self.x_conv[index,:,:,:,:], 'y': self.y[index], 'mask': self.mask[index]}
+    
+    def __len__(self):
+        return self.y.shape[0]

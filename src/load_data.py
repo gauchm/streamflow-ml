@@ -27,11 +27,11 @@ def load_discharge_gr4j_vic():
     return data_runoff
 
 
-def load_rdrs_forcings(as_grid=False):
+def load_rdrs_forcings(as_grid=False, include_lat_lon=False):
     """
     Loads RDRS gridded forcings from disk. 
     If not as_grid, will flatten rows and columns into columns. 
-    Else, will return tuple (array of shape (#timesteps, #vars, #rows, #cols), list of variable names, date range of length #timesteps)
+    Else, will return tuple (array of shape (#timesteps, #vars, #rows, #cols), list of variable names, date range of length #timesteps, and (if specified) lat and lon arrays)
     """
     forcing_variables = ['RDRS_FB_SFC', 'RDRS_FI_SFC', 'RDRS_HU_40m', 'RDRS_P0_SFC', 'RDRS_PR0_SFC', 'RDRS_TT_40m', 'RDRS_UVC_40m', 'RDRS_WDC_40m']
     rdrs_nc = nc.Dataset('../data/RDRS_CaPA24hr_forcings_final.nc', 'r')
@@ -42,8 +42,12 @@ def load_rdrs_forcings(as_grid=False):
         for i in range(len(forcing_variables)):
             rdrs_data[:,i,:,:] = rdrs_nc[forcing_variables[i]][:]
         
+        if include_lat_lon:
+            return_values = rdrs_data, forcing_variables, pd.Series(pd.date_range('2010-01-01 7:00', '2015-01-01 7:00', freq='H')), rdrs_nc['lat'][:], rdrs_nc['lon'][:]
+        else:
+            return_values = rdrs_data, forcing_variables, pd.Series(pd.date_range('2010-01-01 7:00', '2015-01-01 7:00', freq='H'))
         rdrs_nc.close()
-        return rdrs_data, forcing_variables, pd.Series(pd.date_range('2010-01-01 7:00', '2015-01-01 7:00', freq='H'))
+        return return_values
     else:
         rdrs_data = pd.DataFrame(index=pd.date_range('2010-01-01 7:00', '2015-01-01 7:00', freq='H')) # Using 7:00 because forcings are UTC, while runoff is local time
 
