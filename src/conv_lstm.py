@@ -60,8 +60,8 @@ class ConvLSTMCell(nn.Module):
         return h_next, c_next
 
     def init_hidden(self, batch_size, device):
-        return (torch.zeros(batch_size, self.hidden_dim, self.height, self.width, device=device),
-                torch.zeros(batch_size, self.hidden_dim, self.height, self.width, device=device))
+        return (torch.zeros(batch_size, self.hidden_dim, self.height, self.width, device=device, requires_grad=True),
+                torch.zeros(batch_size, self.hidden_dim, self.height, self.width, device=device, requires_grad=True))
 
 
 class ConvLSTM(nn.Module):
@@ -143,6 +143,7 @@ class ConvLSTM(nn.Module):
         
         for layer_idx in range(self.num_layers):
             h, c = hidden_states[layer_idx]
+            
             output_inner = []
             for t in range(seq_len):
 
@@ -153,13 +154,13 @@ class ConvLSTM(nn.Module):
             layer_output = torch.stack(output_inner, dim=1)
             cur_layer_input = layer_output
 
-            last_state_list.append((h.detach(), c.detach()))  # detach to stop BPTT between batches
+            last_state_list.append((h.clone().detach().requires_grad_(True), c.clone().detach().requires_grad_(True)))  # detach to stop BPTT between batches
             if self.return_all_layers | (layer_idx == 0):
                 layer_output_list.append(layer_output)
             else:
                 # Save memory if we will only need the last output anyways
                 layer_output_list[0] = layer_output
-
+        
         return layer_output_list, last_state_list
 
     @staticmethod
