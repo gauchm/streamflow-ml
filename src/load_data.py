@@ -270,12 +270,16 @@ def load_landcover_reduced(values_to_use=None):
     landcover_reduced = np.zeros((len(values_to_use), rdrs_data.shape[2], rdrs_data.shape[3]))
     for row in range(landcover_reduced.shape[1]):
         for col in range(landcover_reduced.shape[2]):
+            landcover_cell = landcover_fullres[row*pixels_per_row:(row+1)*pixels_per_row, col*pixels_per_col:(col+1)*pixels_per_col]
+            non_zero_pixels_per_cell = (landcover_cell.flatten() != 0).sum()
             i = 0
             for k in legend.keys():
                 if k not in values_to_use:
                     continue
-                landcover_cell = landcover_fullres[row*pixels_per_row:(row+1)*pixels_per_row, col*pixels_per_col:(col+1)*pixels_per_col]
-                landcover_reduced[i, row, col] = np.float((landcover_cell == k).sum()) / (landcover_cell.shape[0] * landcover_cell.shape[1])
+                if non_zero_pixels_per_cell == 0:
+                    landcover_reduced[i, row, col] = 0.0
+                else:
+                    landcover_reduced[i, row, col] = np.float((landcover_cell == k).sum()) / non_zero_pixels_per_cell
                 i += 1
                 
     landcover_nc.close()                
