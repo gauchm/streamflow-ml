@@ -229,3 +229,27 @@ def read_station_data_dict(file_name):
             station_data_dict[station_name] = store[station]
             
     return station_data_dict
+
+
+def load_landcover_reduced():
+    """
+    Load landcover data and reduce resolution to rdrs data shape.
+    Returns array of shape (#landtypes, rows, cols), where the first dimension is the averaged amount of this landtype in cell (row, col)
+    """
+    rdrs_data, rdrs_vars, rdrs_dates = load_rdrs_forcings(as_grid=True)
+    landcover_nc = nc.Dataset('../data/landcover_erie.nc', 'r')
+    landcover_fullres = np.array(landcover_nc['Band1'][:])[::-1,:]
+    landcover_values = np.unique(landcover_fullres)
+
+    pixels_per_row = (landcover_fullres.shape[0] // rdrs_data.shape[2]) + 1
+    pixels_per_col = (landcover_fullres.shape[1] // rdrs_data.shape[3]) + 1
+
+    landcover_reduced = np.zeros((len(landcover_values), rdrs_data.shape[2], rdrs_data.shape[3]))
+    for row in range(landcover_reduced.shape[1]):
+        for col in range(landcover_reduced.shape[2]):
+            for i in range(len(landcover_values)):
+                landcover_cell = landcover_fullres[row*pixels_per_row:(row+1)*pixels_per_row, col*pixels_per_col:(col+1)*pixels_per_col]
+                landcover_reduced[i, row, col] = np.float((landcover_cell == landcover_values[i]).sum()) / (landcover_cell.shape[0] * landcover_cell.shape[1])
+                
+    landcover_nc.close()                
+    return landcover_reduced

@@ -155,11 +155,9 @@ class RdrsGridDataset(Dataset):
         self.x_conv = torch.from_numpy(self.x_conv).float()
         # Create a tensor of shape (#days, height, width) of target values (only those cells where we have stations get populated)
         self.y = torch.zeros((len(self.dates), self.conv_height, self.conv_width))
-        self.mask = torch.zeros((len(self.dates), self.conv_height, self.conv_width))
-        self.station_to_row_col = {}
+        self.mask = torch.zeros((len(self.dates), self.conv_height, self.conv_width), dtype=torch.int8)
         for station in data_runoff['station'].unique():
             row, col = self.station_to_index[station]
-            self.station_to_row_col[station] = (row, col)
             station_runoff = data_runoff[data_runoff['station']==station].set_index('date')
             for i in range(len(self.dates)):
                 if self.dates[i] in station_runoff.index:

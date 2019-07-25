@@ -3,6 +3,8 @@ from matplotlib import pyplot as plt
 import hydroeval
 from sklearn import metrics
 from datetime import datetime, timedelta
+import torch
+from torch import nn
 
 
 def evaluate_hourly(station_name, prediction, actual, plot=False):
@@ -46,3 +48,12 @@ def evaluate_daily(station_name, prediction, actual, plot=False, writer=None, cl
         plt.grid()
         plt.legend()
     return nse_clip, mse_clip
+
+
+class NSELoss(nn.Module):
+    def __init__(self):
+        super(NSELoss, self).__init__()
+        
+    def forward(self, prediction, target):
+        nses = torch.sum(torch.pow(prediction - target, 2), dim=0) / torch.sum(torch.pow(target - target.mean(dim=0), 2), dim=0)
+        return nses.mean()
