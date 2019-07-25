@@ -231,25 +231,52 @@ def read_station_data_dict(file_name):
     return station_data_dict
 
 
-def load_landcover_reduced():
+def load_landcover_reduced(values_to_use=None):
     """
     Load landcover data and reduce resolution to rdrs data shape.
-    Returns array of shape (#landtypes, rows, cols), where the first dimension is the averaged amount of this landtype in cell (row, col)
+    if values_to_use is None, returns all land types. Else only the ones specified.
+    Returns (array of shape (#landtypes, rows, cols), where the first dimension is the averaged amount of this landtype in cell (row, col), legend)
     """
     rdrs_data, rdrs_vars, rdrs_dates = load_rdrs_forcings(as_grid=True)
     landcover_nc = nc.Dataset('../data/landcover_erie.nc', 'r')
     landcover_fullres = np.array(landcover_nc['Band1'][:])[::-1,:]
-    landcover_values = np.unique(landcover_fullres)
+    
+    legend = {1: 'Temperate or sub-polar needleleaf forest',
+        2:  'Sub-polar taiga needleleaf forest',
+        3:  'Tropical or sub-tropical broadleaf evergreen forest', 
+        4:  'Tropical or sub-tropical broadleaf deciduous forest',
+        5:  'Temperate or sub-polar broadleaf deciduous forest',
+        6:  'Mixed forest',
+        7:  'Tropical or sub-tropical shrubland',
+        8:  'Temperate or sub-polar shrubland',
+        9:  'Tropical or sub-tropical grassland',
+        10: 'Temperate or sub-polar grassland',
+        11: 'Sub-polar or polar shrubland-lichen-moss',
+        12: 'Sub-polar or polar grassland-lichen-moss',
+        13: 'Sub-polar or polar barren-lichen-moss',
+        14: 'Wetland',
+        15: 'Cropland',
+        16: 'Barren lands',
+        17: 'Urban',
+        18: 'Water',
+        19: 'Snow and Ice'}
+
+    if values_to_use is None:
+        values_to_use = legend.keys()
 
     pixels_per_row = (landcover_fullres.shape[0] // rdrs_data.shape[2]) + 1
     pixels_per_col = (landcover_fullres.shape[1] // rdrs_data.shape[3]) + 1
 
-    landcover_reduced = np.zeros((len(landcover_values), rdrs_data.shape[2], rdrs_data.shape[3]))
+    landcover_reduced = np.zeros((len(values_to_use), rdrs_data.shape[2], rdrs_data.shape[3]))
     for row in range(landcover_reduced.shape[1]):
         for col in range(landcover_reduced.shape[2]):
-            for i in range(len(landcover_values)):
+            i = 0
+            for k in legend.keys():
+                if k not in values_to_use:
+                    continue
                 landcover_cell = landcover_fullres[row*pixels_per_row:(row+1)*pixels_per_row, col*pixels_per_col:(col+1)*pixels_per_col]
-                landcover_reduced[i, row, col] = np.float((landcover_cell == landcover_values[i]).sum()) / (landcover_cell.shape[0] * landcover_cell.shape[1])
+                landcover_reduced[i, row, col] = np.float((landcover_cell == k).sum()) / (landcover_cell.shape[0] * landcover_cell.shape[1])
+                i += 1
                 
     landcover_nc.close()                
-    return landcover_reduced
+    return landcover_reduced, list(legend[i] for i in values_to_use)
