@@ -248,3 +248,34 @@ class ConvLSTMLSTMRegression(nn.Module):
             lstm_hidden = lstm_hidden_states
         lstm_out, lstm_hidden = self.lstm(lstm_in, lstm_hidden)
         return self.linear(lstm_out[:,-1,:]), conv_hidden, lstm_hidden
+    
+    
+class ConvLSTMGridWithGeophysicalInput(nn.Module):
+    def __init__(self, input_size, input_dim, geophysical_dim, convlstm_hidden_dim, conv_hidden_dim, convlstm_kernel_size, conv_kernel_size, num_convlstm_layers, num_conv_layers, conv_activation, dropout=0.0):
+        super(ConvLSTMGridWithGeophysicalInput, self).__init__()
+        self.conv_lstm = ConvLSTM((input_size[0], input_size[1]), input_dim, convlstm_hidden_dim, convlstm_kernel_size, num_convlstm_layers, batch_first=True)
+        self.dropout = nn.Dropout2d(p=dropout)
+        if num_conv_layers == 1:
+            pad = conv_kernel_size[0][0] // 2, conv_kernel_size[0][1] // 2
+            self.conv_out = nn.Conv2d(convlstm_hidden_dim[-1] + geophysical_dim, 1, conv_kernel_size[0], padding=pad)
+        else:
+            pad = conv_kernel_size[0][0] // 2, conv_kernel_size[0][1] // 2
+            conv_layers = [nn.BatchNorm2d(convlstm_hidden_dim[-1] + geophysical_dim), 
+                           nn.Conv2d(convlstm_hidden_dim[-1] + geophysical_dim, conv_hidden_dim[0], conv_kernel_size[0], padding=pad),
+                           nn.Dropout(p=dropout), conv_activation()]
+            for i in range(1, num_conv_layers - 2):
+                pad = conv_kernel_size[i][0] // 2, conv_kernel_size[i][1] // 2
+                conv_layers.append(nn.BatchNorm2d(conv_hidden_dim[i-1]))
+                conv_layers.append(nn.Conv2d(conv_hidden_dim[i-1], conv_hidden_dim[i], conv_kernel_size[i], padding=pad))
+                conv_layers.append(conv_activation())
+                conv_layers.append(nn.Dropout2d(p=dropout))
+            pad = conv_kernel_size[-1][0] // 2, conv_kernel_size[-1][1] // 2
+            conv_layers.append(nn.BatchNorm2d(conv_hidden_dim[-1]))
+            conv_layers.append(nn.Conv2d(conv_hidden_dim[-1], 1, conv_kernel_size[-1], padding=pad))
+            self.conv_out = nn.Sequential(*conv_layers)
+        
+    def forward(self, input_tensor, geophysics_tensor, hidden_state=None):
+        convlstm_out, hidden = self.conv_lstm(input_tensor, hidden_state=hidden_state)
+        convlstm_out = self.dropout(convlstm_out[-1][:,-1,:,:,:])  # last output of last layer
+        conv_in = torch.cat([convlstm_out, geophysics_tensor], dim=1)
+        return self.conv_out(conv_in)[:,0,:,:], hidden

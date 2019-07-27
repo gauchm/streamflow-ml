@@ -284,3 +284,5 @@ def load_landcover_reduced(values_to_use=None):
                 
     landcover_nc.close()                
     return landcover_reduced, list(legend[i] for i in values_to_use)
+
+
