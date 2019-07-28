@@ -122,8 +122,8 @@ def load_train_test_gridded_dividedStreamflow():
 
         for station in data_runoff['station'].unique():
             station_data = data_runoff[data_runoff['station'] == station].set_index('date')
-            station_cell_ids = 39 * station_cell_mapping[station_cell_mapping['station'] == station]['col'] \
-                + station_cell_mapping[station_cell_mapping['station'] == station]['row']
+            station_cell_ids = 39 *( station_cell_mapping[station_cell_mapping['station'] == station]['col'] - 1) \
+                + (station_cell_mapping[station_cell_mapping['station'] == station]['row'] - 1)
             station_rdrs = rdrs_data.filter(regex='_(' + '|'.join(map(lambda x: str(x), station_cell_ids)) + ')$', axis=1)
 
             if any(station_data['runoff'].isna()):
@@ -169,8 +169,8 @@ def load_train_test_gridded_aggregatedForcings(include_all_forcing_vars=False, i
             if include_all_cells:
                 station_cell_ids = ['\w*']
             else:
-                station_cell_ids = 39 * station_cell_mapping[station_cell_mapping['station'] == station]['col'] \
-                    + station_cell_mapping[station_cell_mapping['station'] == station]['row']
+                station_cell_ids = 39 * (station_cell_mapping[station_cell_mapping['station'] == station]['col'] - 1) \
+                    + (station_cell_mapping[station_cell_mapping['station'] == station]['row'] - 1)
 
             if not include_all_forcing_vars:
                 # For temperature use min/max aggregation. Precipitation: sum. solar fluxes, pressure & humidity don't seem to help (at least with min/max/sum)
@@ -203,8 +203,8 @@ def load_train_test_lstm():
         rdrs_data = load_rdrs_forcings()
 
         for station in data_runoff['station'].unique():
-            station_cell_ids = 39 * station_cell_mapping[station_cell_mapping['station'] == station]['col'] \
-                + station_cell_mapping[station_cell_mapping['station'] == station]['row']
+            station_cell_ids = 39 * (station_cell_mapping[station_cell_mapping['station'] == station]['col'] - 1) \
+                + (station_cell_mapping[station_cell_mapping['station'] == station]['row'] - 1)
             station_rdrs = rdrs_data.filter(regex='_(' + '|'.join(map(lambda x: str(x), station_cell_ids)) + ')$', axis=1)
 
             month_onehot = pd.get_dummies(station_rdrs.index.month, prefix='month')
