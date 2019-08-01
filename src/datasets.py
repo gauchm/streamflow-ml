@@ -102,7 +102,7 @@ class StatefulBatchSampler(torch.utils.data.Sampler):
     
 class RdrsGridDataset(Dataset):
     """ RDRS dataset where target is a spatial grid of streamflow values """
-    def __init__(self, rdrs_vars, seq_len, seq_steps, date_start, date_end, conv_scalers=None):
+    def __init__(self, rdrs_vars, seq_len, seq_steps, date_start, date_end, conv_scalers=None, exclude_stations=[]):
         self.date_start = date_start
         self.date_end = date_end
         self.seq_len = seq_len
@@ -120,8 +120,12 @@ class RdrsGridDataset(Dataset):
         data_runoff = data_runoff[(data_runoff['date'] >= self.date_start) & (data_runoff['date'] <= self.date_end)]
         gauge_info = pd.read_csv('../data/gauge_info.csv')[['ID', 'Lat', 'Lon']]
         data_runoff = pd.merge(data_runoff, gauge_info, left_on='station', right_on='ID').drop('ID', axis=1)
-        
         data_runoff = data_runoff.sort_values(by=['date']).reset_index(drop='True')
+            
+        if len(exclude_stations) > 0:
+            self.data_runoff_all_stations = data_runoff[['date', 'station', 'runoff']].copy()
+            data_runoff = data_runoff[~data_runoff['station'].isin(exclude_stations)].reset_index(drop=True)
+        
         self.data_runoff = data_runoff[['date', 'station', 'runoff']]
         
         # get station to (row, col) mapping
