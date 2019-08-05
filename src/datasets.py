@@ -102,7 +102,7 @@ class StatefulBatchSampler(torch.utils.data.Sampler):
     
 class RdrsGridDataset(Dataset):
     """ RDRS dataset where target is a spatial grid of streamflow values """
-    def __init__(self, rdrs_vars, seq_len, seq_steps, date_start, date_end, conv_scalers=None, exclude_stations=[], aggregate_daily=None):
+    def __init__(self, rdrs_vars, seq_len, seq_steps, date_start, date_end, conv_scalers=None, exclude_stations=[], aggregate_daily=None, include_months=False):
         self.date_start = date_start
         self.date_end = date_end
         self.seq_len = seq_len
@@ -160,6 +160,9 @@ class RdrsGridDataset(Dataset):
             station_col = station_idx % rdrs_data.shape[3]
             self.station_to_index[station] = (station_row, station_col)
         
+        if include_months:
+            self.n_conv_vars += 12
+        
         # conv input shape: (samples, seq_len, variables, height, width)
         self.x_conv = np.zeros((len(data_runoff['date'].unique()), seq_len, self.n_conv_vars, self.conv_height, self.conv_width))       
         self.dates = np.sort(data_runoff['date'].unique())
@@ -170,7 +173,16 @@ class RdrsGridDataset(Dataset):
                 end_of_day_index = rdrs_time_index[rdrs_time_index == date].index.values[0] + 23
             else:
                 end_of_day_index = rdrs_time_index[rdrs_time_index == date].index.values[0]
-            self.x_conv[i,:,:,:,:] = rdrs_data[end_of_day_index - (self.seq_len * self.seq_steps) : end_of_day_index : self.seq_steps]
+            
+            date_data = rdrs_data[end_of_day_index - (self.seq_len * self.seq_steps) : end_of_day_index : self.seq_steps]
+            if include_months:
+                month_dummies = np.zeros((self.seq_len, 12, self.conv_height, self.conv_width))
+                for j in range(self.seq_len):
+                    day_index = end_of_day_index - (self.seq_len * self.seq_steps) + (j * self.seq_steps)
+                    month = rdrs_time_index[day_index].month
+                    month_dummies[j,month - 1,:,:] = 1
+                date_data = np.concatenate([date_data, month_dummies], axis=1)
+            self.x_conv[i,:,:,:,:] = date_data
             i += 1
 
         # Scale training data
