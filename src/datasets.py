@@ -102,7 +102,7 @@ class StatefulBatchSampler(torch.utils.data.Sampler):
     
 class RdrsGridDataset(Dataset):
     """ RDRS dataset where target is a spatial grid of streamflow values """
-    def __init__(self, rdrs_vars, seq_len, seq_steps, date_start, date_end, conv_scalers=None, exclude_stations=[]):
+    def __init__(self, rdrs_vars, seq_len, seq_steps, date_start, date_end, conv_scalers=None, exclude_stations=[], aggregate_daily=None):
         self.date_start = date_start
         self.date_end = date_end
         self.seq_len = seq_len
@@ -114,6 +114,27 @@ class RdrsGridDataset(Dataset):
         self.n_conv_vars = len(rdrs_vars)
         self.conv_height = rdrs_data.shape[2]
         self.conv_width = rdrs_data.shape[3]
+        
+        if aggregate_daily is not None:
+            self.n_conv_vars += sum(1 for agg in aggregate_daily if agg == 'minmax')
+            rdrs_time_index_daily = pd.Series(pd.date_range(rdrs_time_index.min().date(), rdrs_time_index.max().date(), freq='D'))
+            rdrs_daily = np.zeros((len(rdrs_time_index), self.n_conv_vars, self.conv_height, self.conv_width))
+            for j in range(len(rdrs_time_index_daily)):
+                day_indices = rdrs_time_index[rdrs_time_index.dt.date == rdrs_time_index_daily.dt.date[j]].index.values
+                i_new = 0
+                for i in range(len(rdrs_vars)):                
+                    day_data = rdrs_data[day_indices,i,:,:]
+                    if aggregate_daily[i] == 'sum':
+                        rdrs_daily[j,i_new,:,:] = day_data.sum(axis=0)
+                    elif aggregate_daily[i] == 'minmax':
+                        rdrs_daily[j,i_new,:,:] = day_data.min(axis=0)
+                        rdrs_daily[j,i_new + 1,:,:] = day_data.max(axis=0)
+                        i_new += 1
+                    else:
+                        raise Exception('Invalid aggregation method')
+                    i_new += 1
+            rdrs_time_index = rdrs_time_index_daily
+            rdrs_data = rdrs_daily
         
         data_runoff = load_data.load_discharge_gr4j_vic()
         data_runoff = data_runoff[~pd.isna(data_runoff['runoff'])]
@@ -145,7 +166,10 @@ class RdrsGridDataset(Dataset):
         i = 0
         for date in self.dates:
             # For each day that is to be predicted, cut out a sequence that ends with that day's 23:00 and is seq_len long
-            end_of_day_index = rdrs_time_index[rdrs_time_index == date].index.values[0] + 23
+            if aggregate_daily is None:
+                end_of_day_index = rdrs_time_index[rdrs_time_index == date].index.values[0] + 23
+            else:
+                end_of_day_index = rdrs_time_index[rdrs_time_index == date].index.values[0]
             self.x_conv[i,:,:,:,:] = rdrs_data[end_of_day_index - (self.seq_len * self.seq_steps) : end_of_day_index : self.seq_steps]
             i += 1
 
