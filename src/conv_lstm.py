@@ -263,7 +263,7 @@ class ConvLSTMGridWithGeophysicalInput(nn.Module):
             conv_layers = [nn.BatchNorm2d(convlstm_hidden_dim[-1] + geophysical_dim), 
                            nn.Conv2d(convlstm_hidden_dim[-1] + geophysical_dim, conv_hidden_dim[0], conv_kernel_size[0], padding=pad),
                            nn.Dropout(p=dropout), conv_activation()]
-            for i in range(1, num_conv_layers - 2):
+            for i in range(1, num_conv_layers - 1):
                 pad = conv_kernel_size[i][0] // 2, conv_kernel_size[i][1] // 2
                 conv_layers.append(nn.BatchNorm2d(conv_hidden_dim[i-1]))
                 conv_layers.append(nn.Conv2d(conv_hidden_dim[i-1], conv_hidden_dim[i], conv_kernel_size[i], padding=pad))

@@ -1,3 +1,8 @@
+pickle/
+slurm-*.out
+data/geophysical/dem
+data/geophysical/landcover
+data/geophysical/groundwater
 .ipynb_checkpoints/
 RDRS_CaPA24hr_forcings_final.nc
 __pycache__/
