@@ -233,7 +233,7 @@ def read_station_data_dict(file_name):
 
 def load_landcover_reduced(values_to_use=None):
     """
-    Load landcover data and reduce resolution to rdrs data shape.
+    Load landcover data, cropped out for lake erie watershed, and reduce resolution to rdrs data shape.
     if values_to_use is None, returns all land types. Else only the ones specified.
     Returns (array of shape (#landtypes, rows, cols), where the first dimension is the averaged amount of this landtype in cell (row, col), legend)
     """
@@ -286,3 +286,185 @@ def load_landcover_reduced(values_to_use=None):
     return landcover_reduced, list(legend[i] for i in values_to_use)
 
 
+def load_landcover(values_to_use=None, min_lat=None, max_lat=None, min_lon=None, max_lon=None):
+    """
+    Load landcover data with 30" resolution.
+    If values_to_use is None, returns all land types. Else only the ones specified.
+    If min/max lat/lon is specified, will only return the specified sub-area.
+    Returns (array of shape (#landtypes, rows, cols), where the first dimension is the averaged amount of this landtype in cell (row, col), legend)
+    """
+    filename = '../data/geophysical/landcover/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90_30sec.nc'
+    
+    landcover_legend = {1: 'Temperate or sub-polar needleleaf forest',
+        2:  'Sub-polar taiga needleleaf forest',
+        3:  'Tropical or sub-tropical broadleaf evergreen forest', 
+        4:  'Tropical or sub-tropical broadleaf deciduous forest',
+        5:  'Temperate or sub-polar broadleaf deciduous forest',
+        6:  'Mixed forest',
+        7:  'Tropical or sub-tropical shrubland',
+        8:  'Temperate or sub-polar shrubland',
+        9:  'Tropical or sub-tropical grassland',
+        10: 'Temperate or sub-polar grassland',
+        11: 'Sub-polar or polar shrubland-lichen-moss',
+        12: 'Sub-polar or polar grassland-lichen-moss',
+        13: 'Sub-polar or polar barren-lichen-moss',
+        14: 'Wetland',
+        15: 'Cropland',
+        16: 'Barren lands',
+        17: 'Urban',
+        18: 'Water',
+        19: 'Snow and Ice'}
+    
+    if not os.path.isfile(filename):
+        import gdal
+        dem_nc = nc.Dataset('../data/geophysical/dem/hydrosheds_n40-45w75-90_30sec.nc', 'r')
+        landcover_nc = nc.Dataset('../data/geophysical/landcover/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90.nc', 'r')
+        landcover = landcover_nc['Band1'][:].filled(np.nan)
+        
+        landcover_30sec_nc = nc.Dataset('../data/geophysical/landcover/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90_30sec.nc', 'w')
+        landcover_30sec_nc.setncattr('Conventions', 'CF-1.6')
+        landcover_30sec_nc.createDimension('lat')
+        landcover_30sec_nc.createDimension('lon')
+        landcover_30sec_nc.createVariable('crs', 'S1')
+        for attr in landcover_nc['crs'].ncattrs():
+            landcover_30sec_nc['crs'].setncattr(attr, landcover_nc['crs'].getncattr(attr))
+        landcover_30sec_nc.createVariable('lat', np.float64, dimensions=('lat'))
+        landcover_30sec_nc.createVariable('lon', np.float64, dimensions=('lon'))
+        landcover_30sec_nc['lat'][:] = dem_nc['lat'][:]
+        landcover_30sec_nc['lon'][:] = dem_nc['lon'][:]
+        for attr in landcover_nc['lat'].ncattrs():
+            landcover_30sec_nc['lat'].setncattr(attr, landcover_nc['lat'].getncattr(attr))
+        for attr in landcover_nc['lon'].ncattrs():
+            landcover_30sec_nc['lon'].setncattr(attr, landcover_nc['lon'].getncattr(attr))
+        
+        dem_nc.close()
+        
+        # gdal.Warp can only resample one band at a time. Hence, resample each landtype separately and successively merge into _30sec.nc.
+        for i, landtype in landcover_legend.items():
+            print(landtype)
+            landcover_temp_nc = nc.Dataset('../data/geophysical/landcover/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90_temp.nc', 'w')
+            landcover_temp_nc.createDimension('lat')
+            landcover_temp_nc.createDimension('lon')
+            landcover_temp_nc.createVariable('crs', 'S1')
+            landcover_temp_nc.setncattr('Conventions', 'CF-1.6')
+            for attr in landcover_nc['crs'].ncattrs():
+                landcover_temp_nc['crs'].setncattr(attr, landcover_nc['crs'].getncattr(attr))
+            landcover_temp_nc.createVariable('lat', np.float64, dimensions=('lat'))
+            landcover_temp_nc.createVariable('lon', np.float64, dimensions=('lon'))
+            landcover_temp_nc['lat'][:] = landcover_nc['lat'][:]
+            landcover_temp_nc['lon'][:] = landcover_nc['lon'][:]
+            for attr in landcover_nc['lat'].ncattrs():
+                landcover_temp_nc['lat'].setncattr(attr, landcover_nc['lat'].getncattr(attr))
+            for attr in landcover_nc['lon'].ncattrs():
+                landcover_temp_nc['lon'].setncattr(attr, landcover_nc['lon'].getncattr(attr))
+
+
+            varname = 'landtype_{}'.format(i)
+            landcover_temp_nc.createVariable(varname, np.float, dimensions=('lat', 'lon'))
+            landcover_temp_nc[varname][:] = (landcover == i).astype(np.float)
+            landcover_temp_nc.close()
+
+            gdal_temp = gdal.Open('../data/geophysical/landcover/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90_temp.nc')
+            warp_options = gdal.WarpOptions(format='netCDF', xRes=0.008333333333333333333, yRes=0.008333333333333333333, resampleAlg='average')
+            print('Warping...')
+            gdal.Warp('../data/geophysical/landcover/landtype_temp.nc'.format(varname), gdal_temp, options=warp_options)
+            print('Warping complete.')
+            landtype_temp = nc.Dataset('../data/geophysical/landcover/landtype_temp.nc', 'r')
+            landcover_30sec_nc.createVariable(varname, 'f', dimensions=('lat', 'lon'))
+            landcover_30sec_nc[varname][:] = landtype_temp['Band1'][:]
+            landcover_30sec_nc[varname].setncattr('landtype', landtype)
+
+            landtype_temp.close()
+            os.remove('../data/geophysical/landcover/landtype_temp.nc')
+            os.remove('../data/geophysical/landcover/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90_temp.nc')
+        
+        landcover_nc.close()
+        landcover_30sec_nc.close()
+    
+    if values_to_use is None:
+        values_to_use = list(landcover_legend.keys())
+    
+    landcover_nc = nc.Dataset('../data/geophysical/landcover/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90_30sec.nc', 'r')
+    landcover = np.zeros((len(values_to_use), landcover_nc['lat'].shape[0], landcover_nc['lon'].shape[0]))
+    for i in range(len(values_to_use)):
+        landcover[i] = landcover_nc['landtype_{}'.format(values_to_use[i])][:].filled(np.nan)
+    
+    landcover_nc.close()
+    min_lat_idx, max_lat_idx, min_lon_idx, max_lon_idx = get_bounding_box_indices(min_lat, max_lat, min_lon, max_lon)
+    return landcover[:,min_lat_idx:max_lat_idx,min_lon_idx:max_lon_idx], list(landcover_legend[i] for i in values_to_use)
+
+
+def load_dem(min_lat=None, max_lat=None, min_lon=None, max_lon=None):
+    """
+    Load DEM at 30" resolution.
+    If min/max lat/lon is specified, will only return the specified sub-area.
+    """
+    dem_nc = nc.Dataset('../data/geophysical/dem/hydrosheds_n40-45w75-90_30sec.nc', 'r')
+    dem = dem_nc['Band1'][:].filled(np.nan)
+
+    min_lat_idx, max_lat_idx, min_lon_idx, max_lon_idx = get_bounding_box_indices(min_lat, max_lat, min_lon, max_lon)
+    return dem[min_lat_idx:max_lat_idx,min_lon_idx:max_lon_idx]
+
+def load_groundwater(min_lat=None, max_lat=None, min_lon=None, max_lon=None):
+    """
+    Load groundwater data at 30" resolution.
+    If min/max lat/lon is specified, will only return the specified sub-area.
+    """
+    groundwater_nc = nc.Dataset('../data/geophysical/groundwater/N_America_model_wtd_v2_n40-45w75-90.nc', 'r')
+    groundwater = groundwater_nc['Band1'][:].filled(np.nan)
+    
+    min_lat_idx, max_lat_idx, min_lon_idx, max_lon_idx = get_bounding_box_indices(min_lat, max_lat, min_lon, max_lon)
+    return groundwater[min_lat_idx:max_lat_idx,min_lon_idx:max_lon_idx]
+
+def load_soil(min_lat=None, max_lat=None, min_lon=None, max_lon=None):
+    """
+    Load soil data at 30" resolution.
+    If min/max lat/lon is specified, will only return the specified sub-area.
+    """
+    soiltypes = ['SAND', 'CLAY']
+    soil_nc = nc.Dataset('../data/geophysical/soil/SAND1_n40-45w75-90.nc', 'r')
+    soil = np.zeros((len(soiltypes) * 8, soil_nc['lat'].shape[0], soil_nc['lon'].shape[0]))
+    soil_nc.close()
+
+    # Each nc file contains 4 soil layers; per soil type there are 2 nc files.
+    soil_legend = []
+    for i in range(len(soiltypes)):
+        for j in [1,2]:
+            soil_nc = nc.Dataset('../data/geophysical/soil/{}{}_n40-45w75-90.nc'.format(soiltypes[i], j), 'r')
+            for layer in range(1,5):
+                soil[i*8 + ((j-1)*4 + layer-1)] = soil_nc['Band{}'.format(layer)][:].astype(np.float).filled(np.nan) / 100.0
+                soil_legend.append('{}-layer{}'.format(soiltypes[i], (j-1)*4 + layer))
+            soil_nc.close()
+    
+    min_lat_idx, max_lat_idx, min_lon_idx, max_lon_idx = get_bounding_box_indices(min_lat, max_lat, min_lon, max_lon)
+    return soil[:,min_lat_idx:max_lat_idx,min_lon_idx:max_lon_idx], soil_legend
+
+
+def get_bounding_box_indices(min_lat, max_lat, min_lon, max_lon):
+    """
+    Returns indices to split the 30" datasets such that they only contain lats/lons within the specified bounding box.
+    """
+    dem_nc = nc.Dataset('../data/geophysical/dem/hydrosheds_n40-45w75-90_30sec.nc', 'r')
+    lats = dem_nc['lat'][:]
+    lons = dem_nc['lon'][:]
+    
+    if min_lat is None:
+        min_lat = lats.min()
+    if max_lat is None:
+        max_lat = lats.max()
+    if min_lon is None:
+        min_lon = lons.min()
+    if max_lon is None:
+        max_lon = lons.max()
+        
+    if min_lat > lats.max() or max_lat < lats.min() or min_lon > lons.max() or max_lon < lons.min():
+        raise Exception('Empty lat/lon selection.')
+
+    min_lat_idx = (lats >= min_lat).argmax()
+    max_lat_idx = (lats <= max_lat).argmin() if max_lat < lats.max() else len(lats)
+    min_lon_idx = (lons >= min_lon).argmax()
+    max_lon_idx = (lons <= max_lon).argmin() if max_lon < lons.max() else len(lons)
+    dem_nc.close()
+    
+    return min_lat_idx, max_lat_idx, min_lon_idx, max_lon_idx
+    
