@@ -27,6 +27,35 @@ def load_discharge_gr4j_vic():
     return data_runoff
 
 
+def load_simulated_streamflow():
+    """
+    Loads VIC-GRU+Raven streamflow simulation for all subbasins.
+    Returns (DataFrame of simulations for each subbasin, dict subbasin -> (row, col) in the grid)
+    """
+    simulation_per_subbasin = pd.read_csv('../data/GRIP-E_Hydrographs_VIC-GRU_test2013+2014_allSubbasins.csv').drop(['time', 'hour', 'precip [mm/day]'], axis=1)
+
+    subbasin_nc = nc.Dataset('../data/simulations_shervan/Raven_input.nc', 'r')
+    subbasin_lat_lons = pd.DataFrame({'lat': subbasin_nc['lat'][:], 'lon': subbasin_nc['lon'][:]}, index=range(1,len(subbasin_nc['lat'][:])+1))
+    subbasin_nc.close()
+
+    simulation_per_subbasin = simulation_per_subbasin.rename(lambda c: int(c[3:].replace(' [m3/s]', '')) if c not in ['date', 'hour', 'precip [mm/day]'] else c, axis=1)
+    simulation_per_subbasin = simulation_per_subbasin.set_index('date').transpose().unstack().reset_index().rename({'level_0': 'date', 'level_1': 'subbasin', 0: 'simulated_streamflow'}, axis=1)
+    simulation_per_subbasin['date'] = pd.to_datetime(simulation_per_subbasin['date'])
+    simulation_per_subbasin['date'] = simulation_per_subbasin['date'] - timedelta(days=1)  # Need to lag raven output back by one day.
+    simulation_per_subbasin = simulation_per_subbasin.join(subbasin_lat_lons, on='subbasin')
+
+    lats, lons = load_dem_lats_lons()
+    subbasin_outlet_to_index = {}
+    for subbasin in simulation_per_subbasin['subbasin'].unique():
+        outlet_lat, outlet_lon = subbasin_lat_lons.loc[subbasin, ['lat', 'lon']]
+        # find nearest cell
+        outlet_row = np.argmin(np.square(lats - outlet_lat))
+        outlet_col = np.argmin(np.square(lons - outlet_lon))
+        subbasin_outlet_to_index[subbasin] = (outlet_row, outlet_col)
+    
+    return simulation_per_subbasin, subbasin_outlet_to_index
+
+    
 def load_rdrs_forcings(as_grid=False, include_lat_lon=False):
     """
     Loads RDRS gridded forcings from disk. 
@@ -317,9 +346,9 @@ def load_landcover(values_to_use=None, min_lat=None, max_lat=None, min_lon=None,
     
     if not os.path.isfile(filename):
         import gdal
-        dem_nc = nc.Dataset('../data/geophysical/dem/hydrosheds_n40-45w75-90_30sec.nc', 'r')
         landcover_nc = nc.Dataset('../data/geophysical/landcover/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90.nc', 'r')
         landcover = landcover_nc['Band1'][:].filled(np.nan)
+        dem_lats, dem_lons = load_dem_lats_lons()
         
         landcover_30sec_nc = nc.Dataset('../data/geophysical/landcover/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90_30sec.nc', 'w')
         landcover_30sec_nc.setncattr('Conventions', 'CF-1.6')
@@ -330,14 +359,12 @@ def load_landcover(values_to_use=None, min_lat=None, max_lat=None, min_lon=None,
             landcover_30sec_nc['crs'].setncattr(attr, landcover_nc['crs'].getncattr(attr))
         landcover_30sec_nc.createVariable('lat', np.float64, dimensions=('lat'))
         landcover_30sec_nc.createVariable('lon', np.float64, dimensions=('lon'))
-        landcover_30sec_nc['lat'][:] = dem_nc['lat'][:]
-        landcover_30sec_nc['lon'][:] = dem_nc['lon'][:]
+        landcover_30sec_nc['lat'][:] = dem_lats
+        landcover_30sec_nc['lon'][:] = dem_lons
         for attr in landcover_nc['lat'].ncattrs():
             landcover_30sec_nc['lat'].setncattr(attr, landcover_nc['lat'].getncattr(attr))
         for attr in landcover_nc['lon'].ncattrs():
             landcover_30sec_nc['lon'].setncattr(attr, landcover_nc['lon'].getncattr(attr))
-        
-        dem_nc.close()
         
         # gdal.Warp can only resample one band at a time. Hence, resample each landtype separately and successively merge into _30sec.nc.
         for i, landtype in landcover_legend.items():
@@ -388,7 +415,7 @@ def load_landcover(values_to_use=None, min_lat=None, max_lat=None, min_lon=None,
     landcover = np.zeros((0, landcover_nc['lat'].shape[0], landcover_nc['lon'].shape[0]))
     legend = []
     for i in range(len(values_to_use)):
-        landcover_i = landcover_nc['landtype_{}'.format(values_to_use[i])][:].filled(np.nan)
+        landcover_i = landcover_nc['landtype_{}'.format(values_to_use[i])][:][::-1,:].filled(np.nan)
         if landcover_i.sum() == 0:
             continue
         landcover = np.concatenate([landcover, landcover_i.reshape((1,landcover.shape[1],landcover.shape[2]))], axis=0)
@@ -396,7 +423,7 @@ def load_landcover(values_to_use=None, min_lat=None, max_lat=None, min_lon=None,
     
     landcover_nc.close()
     min_lat_idx, max_lat_idx, min_lon_idx, max_lon_idx = get_bounding_box_indices(min_lat, max_lat, min_lon, max_lon)
-    return landcover[:,min_lat_idx:max_lat_idx,min_lon_idx:max_lon_idx], legend
+    return landcover[:,max_lat_idx:min_lat_idx,min_lon_idx:max_lon_idx], legend
 
 
 def load_dem(min_lat=None, max_lat=None, min_lon=None, max_lon=None):
@@ -405,10 +432,10 @@ def load_dem(min_lat=None, max_lat=None, min_lon=None, max_lon=None):
     If min/max lat/lon is specified, will only return the specified sub-area.
     """
     dem_nc = nc.Dataset('../data/geophysical/dem/hydrosheds_n40-45w75-90_30sec.nc', 'r')
-    dem = dem_nc['Band1'][:].filled(np.nan)
+    dem = dem_nc['Band1'][:][::-1,:].filled(np.nan)
 
     min_lat_idx, max_lat_idx, min_lon_idx, max_lon_idx = get_bounding_box_indices(min_lat, max_lat, min_lon, max_lon)
-    return dem[min_lat_idx:max_lat_idx,min_lon_idx:max_lon_idx]
+    return dem[max_lat_idx:min_lat_idx,min_lon_idx:max_lon_idx]
 
 def load_groundwater(min_lat=None, max_lat=None, min_lon=None, max_lon=None):
     """
@@ -416,10 +443,10 @@ def load_groundwater(min_lat=None, max_lat=None, min_lon=None, max_lon=None):
     If min/max lat/lon is specified, will only return the specified sub-area.
     """
     groundwater_nc = nc.Dataset('../data/geophysical/groundwater/N_America_model_wtd_v2_n40-45w75-90.nc', 'r')
-    groundwater = groundwater_nc['Band1'][:].filled(np.nan)
+    groundwater = groundwater_nc['Band1'][:][::-1,:].filled(np.nan)
     
     min_lat_idx, max_lat_idx, min_lon_idx, max_lon_idx = get_bounding_box_indices(min_lat, max_lat, min_lon, max_lon)
-    return groundwater[min_lat_idx:max_lat_idx,min_lon_idx:max_lon_idx]
+    return groundwater[max_lat_idx:min_lat_idx,min_lon_idx:max_lon_idx]
 
 def load_soil(min_lat=None, max_lat=None, min_lon=None, max_lon=None):
     """
@@ -437,21 +464,35 @@ def load_soil(min_lat=None, max_lat=None, min_lon=None, max_lon=None):
         for j in [1,2]:
             soil_nc = nc.Dataset('../data/geophysical/soil/{}{}_n40-45w75-90.nc'.format(soiltypes[i], j), 'r')
             for layer in range(1,5):
-                soil[i*8 + ((j-1)*4 + layer-1)] = soil_nc['Band{}'.format(layer)][:].astype(np.float).filled(np.nan) / 100.0
+                soil[i*8 + ((j-1)*4 + layer-1)] = soil_nc['Band{}'.format(layer)][:][::-1,:]\
+                        .astype(np.float).filled(np.nan) / 100.0
                 soil_legend.append('{}-layer{}'.format(soiltypes[i], (j-1)*4 + layer))
             soil_nc.close()
     
     min_lat_idx, max_lat_idx, min_lon_idx, max_lon_idx = get_bounding_box_indices(min_lat, max_lat, min_lon, max_lon)
-    return soil[:,min_lat_idx:max_lat_idx,min_lon_idx:max_lon_idx], soil_legend
+    return soil[:,max_lat_idx:min_lat_idx,min_lon_idx:max_lon_idx], soil_legend
+
+
+def load_dem_lats_lons():
+    """
+    Returns arrays of lats and lons of 30" DEM dataset.
+    Note that lats are decreasing with index.
+    """
+    dem_nc = nc.Dataset('../data/geophysical/dem/hydrosheds_n40-45w75-90_30sec.nc', 'r')
+    lats = dem_nc['lat'][:][::-1].filled(np.nan)
+    lons = dem_nc['lon'][:].filled(np.nan)
+    dem_nc.close()
+    
+    return lats, lons
 
 
 def get_bounding_box_indices(min_lat, max_lat, min_lon, max_lon):
     """
     Returns indices to split the 30" datasets such that they only contain lats/lons within the specified bounding box.
+    Note that min_lat_idx will be larger than max_lat_idx, because latitudes decrease with index.
     """
-    dem_nc = nc.Dataset('../data/geophysical/dem/hydrosheds_n40-45w75-90_30sec.nc', 'r')
-    lats = dem_nc['lat'][:]
-    lons = dem_nc['lon'][:]
+    lats, lons = load_dem_lats_lons()
+    lats = lats[::-1]  # lats go from high to low
     
     if min_lat is None:
         min_lat = lats.min()
@@ -465,11 +506,10 @@ def get_bounding_box_indices(min_lat, max_lat, min_lon, max_lon):
     if min_lat > lats.max() or max_lat < lats.min() or min_lon > lons.max() or max_lon < lons.min():
         raise Exception('Empty lat/lon selection.')
 
-    min_lat_idx = (lats >= min_lat).argmax()
-    max_lat_idx = (lats <= max_lat).argmin() if max_lat < lats.max() else len(lats)
+    min_lat_idx = len(lats) - (lats >= min_lat).argmax() - 1
+    max_lat_idx = len(lats) - (lats >= max_lat).argmax() - 1 if max_lat <= lats.max() else 0
     min_lon_idx = (lons >= min_lon).argmax()
-    max_lon_idx = (lons <= max_lon).argmin() if max_lon < lons.max() else len(lons)
-    dem_nc.close()
+    max_lon_idx = (lons >= max_lon).argmax() if max_lon < lons.max() else len(lons)
     
     return min_lat_idx, max_lat_idx, min_lon_idx, max_lon_idx
     

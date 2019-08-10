@@ -101,19 +101,36 @@ class StatefulBatchSampler(torch.utils.data.Sampler):
 
     
 class RdrsGridDataset(Dataset):
-    """ RDRS dataset where target is a spatial grid of streamflow values """
-    def __init__(self, rdrs_vars, seq_len, seq_steps, date_start, date_end, conv_scalers=None, exclude_stations=[], aggregate_daily=None, include_months=False):
+    """ 
+    RDRS dataset where target is a spatial grid of streamflow values.
+    If include_simulated_streamflow, the returned items will be dicts y -> actual gauge stations, y_sim -> simulated gauges.
+    Else, the dict will only contain y.
+    
+    If out_lats and out_lons are not specified, will use RDRS grid as output resolution.
+    Specifying out_lats/lons allows for different resolution of geophysical (non-time-series) inputs.
+    """
+    def __init__(self, rdrs_vars, seq_len, seq_steps, date_start, date_end, conv_scalers=None, exclude_stations=[], aggregate_daily=None, include_months=False, include_simulated_streamflow=False, out_lats=None, out_lons=None):
         self.date_start = date_start
         self.date_end = date_end
         self.seq_len = seq_len
         self.seq_steps = seq_steps
         self.conv_scalers = conv_scalers
+        self.include_simulated_streamflow = include_simulated_streamflow
         
         rdrs_data, rdrs_var_names, rdrs_time_index, lats, lons = load_data.load_rdrs_forcings(as_grid=True, include_lat_lon=True)
         rdrs_data = rdrs_data[:,rdrs_vars,:,:]
         self.n_conv_vars = len(rdrs_vars)
         self.conv_height = rdrs_data.shape[2]
         self.conv_width = rdrs_data.shape[3]
+        
+        self.in_lats = lats
+        self.in_lons = lons
+        self.out_lats = self.in_lats if out_lats is None else np.tile(out_lats,len(out_lons)).reshape(len(out_lons),-1).T
+        self.out_lons = self.in_lons if out_lons is None else np.tile(out_lons,len(out_lats)).reshape(len(out_lats),-1)
+        if out_lats is not None and out_lons is not None:
+            # Create upsampling map so we can quickly upsample during training/testing.
+            self.upsample_map_rows, self.upsample_map_cols = map_to_geophysical_coords(self.in_lats, self.in_lons, 
+                                                                                       self.out_lats, self.out_lons):
         
         if aggregate_daily is not None:
             self.n_conv_vars += sum(1 for agg in aggregate_daily if agg == 'minmax')
@@ -155,9 +172,9 @@ class RdrsGridDataset(Dataset):
             station_lat = data_runoff[data_runoff['station'] == station]['Lat'].values[0]
             station_lon = data_runoff[data_runoff['station'] == station]['Lon'].values[0]
             # find nearest cell
-            station_idx = np.argmin(np.square(lats - station_lat) + np.square(lons - station_lon))
-            station_row = station_idx // rdrs_data.shape[3]
-            station_col = station_idx % rdrs_data.shape[3]
+            station_idx = np.argmin(np.square(self.out_lats - station_lat) + np.square(self.out_lons - station_lon))
+            station_row = station_idx // self.out_lons.shape[1]
+            station_col = station_idx % self.out_lons.shape[1]
             self.station_to_index[station] = (station_row, station_col)
         
         if include_months:
@@ -192,10 +209,25 @@ class RdrsGridDataset(Dataset):
             self.x_conv[:,:,i,:,:] = np.nan_to_num(self.conv_scalers[i].fit_transform(self.x_conv[:,:,i,:,:].reshape((-1, 1)))
                                                    .reshape(self.x_conv[:,:,i,:,:].shape))
 
+        if include_simulated_streamflow:
+            self.simulated_streamflow, self.outlet_to_row_col = load_data.load_simulated_streamflow()
+            # Create a tensor of shape (#days, height, width) of target values (only the cells of virtual gauges get populated)
+            self.y_sim = torch.zeros((len(self.dates), self.out_lats.shape[0], self.out_lats.shape[1]))
+             # Mask is True iff this cell is a subbasin's outlet
+            self.mask_sim = torch.zeros((self.out_lats.shape[0], self.out_lats.shape[1]), dtype=torch.bool)
+            for subbasin in self.simulated_streamflow['subbasin'].unique():
+                row, col = self.outlet_to_row_col[subbasin]
+                self.mask_sim[row, col] = True
+                subbasin_streamflow = self.simulated_streamflow[self.simulated_streamflow['subbasin']==subbasin].set_index('date')
+                for i in range(len(self.dates)):
+                    if self.dates[i] in subbasin_streamflow.index:
+                        self.y_sim[i, row, col] = subbasin_streamflow.loc[self.dates[i], 'simulated_streamflow']
+            
         self.x_conv = torch.from_numpy(self.x_conv).float()
         # Create a tensor of shape (#days, height, width) of target values (only those cells where we have stations get populated)
-        self.y = torch.zeros((len(self.dates), self.conv_height, self.conv_width))
-        self.mask = torch.zeros((len(self.dates), self.conv_height, self.conv_width), dtype=torch.bool)
+        self.y = torch.zeros((len(self.dates), self.out_lats.shape[0], self.out_lats.shape[1]))
+        # Mask is True iff we have an actual streamflow value for this cell at this date
+        self.mask = torch.zeros((len(self.dates), self.out_lats.shape[0], self.out_lats.shape[1]), dtype=torch.bool)
         for station in data_runoff['station'].unique():
             row, col = self.station_to_index[station]
             station_runoff = data_runoff[data_runoff['station']==station].set_index('date')
@@ -203,9 +235,13 @@ class RdrsGridDataset(Dataset):
                 if self.dates[i] in station_runoff.index:
                     self.mask[i, row, col] = True
                     self.y[i, row, col] = station_runoff.loc[self.dates[i], 'runoff']
-        
+                    
     def __getitem__(self, index):
-        return {'x_conv': self.x_conv[index,:,:,:,:], 'y': self.y[index], 'mask': self.mask[index]}
+        if self.include_simulated_streamflow:
+            return {'x_conv': self.x_conv[index,:,:,:,:], 'y': self.y[index], 'mask': self.mask[index],
+                    'y_sim': self.y_sim[index], 'mask_sim': self.mask_sim}
+        else:
+            return {'x_conv': self.x_conv[index,:,:,:,:], 'y': self.y[index], 'mask': self.mask[index]}
     
     def __len__(self):
         return self.y.shape[0]
@@ -213,10 +249,12 @@ class RdrsGridDataset(Dataset):
     
 class GeophysicalGridDataset(IterableDataset):
     """ Dataset of geophysical gridded inputs. """
-    def __init__(self, dem=True, landcover=True, soil=True, groundwater=True, min_lat=None, max_lat=None, min_lon=None, max_lon=None, landcover_types=None):
+    def __init__(self, dem=True, landcover=True, soil=True, groundwater=True, min_lat=None, max_lat=None, min_lon=None, max_lon=None, landcover_types=None, scalers=None):
 
+        self.scalers = scalers
+        
         min_lat_idx, max_lat_idx, min_lon_idx, max_lon_idx = load_data.get_bounding_box_indices(min_lat, max_lat, min_lon, max_lon)
-        self.item = np.zeros((0,max_lat_idx - min_lat_idx,max_lon_idx - min_lon_idx))
+        self.item = np.zeros((0,min_lat_idx - max_lat_idx,max_lon_idx - min_lon_idx))
         
         if dem:
             self.dem = load_data.load_dem(min_lat, max_lat, min_lon, max_lon)
@@ -230,9 +268,39 @@ class GeophysicalGridDataset(IterableDataset):
         if groundwater:
             self.groundwater = load_data.load_groundwater(min_lat, max_lat, min_lon, max_lon)
             self.item = np.concatenate([self.item, self.groundwater.reshape((1, self.groundwater.shape[0], self.groundwater.shape[1]))], axis=0)
-        
+            
+        # Scale training data
+        if self.scalers is None:
+            self.scalers = list(preprocessing.StandardScaler() for _ in range(self.item.shape[0]))
+        for i in range(self.item.shape[0]):
+            self.item[i,:,:] = np.nan_to_num(self.scalers[i].fit_transform(self.item[i,:,:].reshape((-1, 1))).reshape(self.item[i,:,:].shape))
+            
+        lats, lons = load_data.load_dem_lats_lons()
+        self.lats = np.tile(lats,len(lons)).reshape(len(lons),-1).T[max_lat_idx:min_lat_idx,min_lon_idx:max_lon_idx]
+        self.lons = np.tile(lons,len(lats)).reshape(len(lats),-1)[max_lat_idx:min_lat_idx,min_lon_idx:max_lon_idx]
         
     def __iter__(self):
         while True:
             yield self.item
+
+
+def map_to_geophysical_coords(lowres_lats, lowres_lons, geophys_lats, geophys_lons):
+    """
+    Generates a mapping from high-resolution cell to (row, col) in low-resolution grid
+    """
+    upsample_map_rows = np.zeros(geophys_lats.shape, dtype=int)
+    upsample_map_cols = np.zeros(geophys_lats.shape, dtype=int)
+    for i in range(geophys_lats.shape[0]):
+        for j in range(geophys_lats.shape[1]):
+            highres_lat, highres_lon = geophys_lats[i,j], geophys_lons[i,j]
+            closest_lowres_cell = np.argmin(np.square(lowres_lats - highres_lat) + np.square(lowres_lons - highres_lon))
+            upsample_map_rows[i,j] = closest_lowres_cell // lowres_lats.shape[1]
+            upsample_map_cols[i,j] = closest_lowres_cell % lowres_lats.shape[1]
     
+    return upsample_map_rows, upsample_map_cols
+
+def upsample_to_geophysical_input(lowres_data, upsample_map_rows, upsample_map_cols):
+    """
+    Upsamples lowres_data based on upsample_map
+    """
+    return lowres_data[upsample_map_rows, upsample_map_cols]
