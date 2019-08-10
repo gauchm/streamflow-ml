@@ -128,9 +128,9 @@ class RdrsGridDataset(Dataset):
         self.out_lats = self.in_lats if out_lats is None else np.tile(out_lats,len(out_lons)).reshape(len(out_lons),-1).T
         self.out_lons = self.in_lons if out_lons is None else np.tile(out_lons,len(out_lats)).reshape(len(out_lats),-1)
         if out_lats is not None and out_lons is not None:
-            # Create upsampling map so we can quickly upsample during training/testing.
+            print('Creating upsampling map to quickly upsample during training/testing')
             self.upsample_map_rows, self.upsample_map_cols = map_to_geophysical_coords(self.in_lats, self.in_lons, 
-                                                                                       self.out_lats, self.out_lons):
+                                                                                       self.out_lats, self.out_lons)
         
         if aggregate_daily is not None:
             self.n_conv_vars += sum(1 for agg in aggregate_daily if agg == 'minmax')
