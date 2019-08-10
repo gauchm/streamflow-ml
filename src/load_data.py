@@ -385,13 +385,18 @@ def load_landcover(values_to_use=None, min_lat=None, max_lat=None, min_lon=None,
         values_to_use = list(landcover_legend.keys())
     
     landcover_nc = nc.Dataset('../data/geophysical/landcover/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90_30sec.nc', 'r')
-    landcover = np.zeros((len(values_to_use), landcover_nc['lat'].shape[0], landcover_nc['lon'].shape[0]))
+    landcover = np.zeros((0, landcover_nc['lat'].shape[0], landcover_nc['lon'].shape[0]))
+    legend = []
     for i in range(len(values_to_use)):
-        landcover[i] = landcover_nc['landtype_{}'.format(values_to_use[i])][:].filled(np.nan)
+        landcover_i = landcover_nc['landtype_{}'.format(values_to_use[i])][:].filled(np.nan)
+        if landcover_i.sum() == 0:
+            continue
+        landcover = np.concatenate([landcover, landcover_i.reshape((1,landcover.shape[1],landcover.shape[2]))], axis=0)
+        legend.append(landcover_legend[values_to_use[i]])
     
     landcover_nc.close()
     min_lat_idx, max_lat_idx, min_lon_idx, max_lon_idx = get_bounding_box_indices(min_lat, max_lat, min_lon, max_lon)
-    return landcover[:,min_lat_idx:max_lat_idx,min_lon_idx:max_lon_idx], list(landcover_legend[i] for i in values_to_use)
+    return landcover[:,min_lat_idx:max_lat_idx,min_lon_idx:max_lon_idx], legend
 
 
 def load_dem(min_lat=None, max_lat=None, min_lon=None, max_lon=None):

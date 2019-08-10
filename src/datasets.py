@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from sklearn import preprocessing
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, IterableDataset
 from src import load_data
 
 class RdrsDataset(Dataset):
@@ -195,13 +195,13 @@ class RdrsGridDataset(Dataset):
         self.x_conv = torch.from_numpy(self.x_conv).float()
         # Create a tensor of shape (#days, height, width) of target values (only those cells where we have stations get populated)
         self.y = torch.zeros((len(self.dates), self.conv_height, self.conv_width))
-        self.mask = torch.zeros((len(self.dates), self.conv_height, self.conv_width), dtype=torch.int8)
+        self.mask = torch.zeros((len(self.dates), self.conv_height, self.conv_width), dtype=torch.bool)
         for station in data_runoff['station'].unique():
             row, col = self.station_to_index[station]
             station_runoff = data_runoff[data_runoff['station']==station].set_index('date')
             for i in range(len(self.dates)):
                 if self.dates[i] in station_runoff.index:
-                    self.mask[i, row, col] = 1
+                    self.mask[i, row, col] = True
                     self.y[i, row, col] = station_runoff.loc[self.dates[i], 'runoff']
         
     def __getitem__(self, index):
@@ -209,3 +209,30 @@ class RdrsGridDataset(Dataset):
     
     def __len__(self):
         return self.y.shape[0]
+
+    
+class GeophysicalGridDataset(IterableDataset):
+    """ Dataset of geophysical gridded inputs. """
+    def __init__(self, dem=True, landcover=True, soil=True, groundwater=True, min_lat=None, max_lat=None, min_lon=None, max_lon=None, landcover_types=None):
+
+        min_lat_idx, max_lat_idx, min_lon_idx, max_lon_idx = load_data.get_bounding_box_indices(min_lat, max_lat, min_lon, max_lon)
+        self.item = np.zeros((0,max_lat_idx - min_lat_idx,max_lon_idx - min_lon_idx))
+        
+        if dem:
+            self.dem = load_data.load_dem(min_lat, max_lat, min_lon, max_lon)
+            self.item = np.concatenate([self.item, self.dem.reshape((1,self.dem.shape[0], self.dem.shape[1]))], axis=0)
+        if landcover:
+            self.landcover, self.landcover_legend = load_data.load_landcover(landcover_types, min_lat, max_lat, min_lon, max_lon)
+            self.item = np.concatenate([self.item, self.landcover], axis=0)
+        if soil:
+            self.soil, self.soil_legend = load_data.load_soil(min_lat, max_lat, min_lon, max_lon)
+            self.item = np.concatenate([self.item, self.soil], axis=0)
+        if groundwater:
+            self.groundwater = load_data.load_groundwater(min_lat, max_lat, min_lon, max_lon)
+            self.item = np.concatenate([self.item, self.groundwater.reshape((1, self.groundwater.shape[0], self.groundwater.shape[1]))], axis=0)
+        
+        
+    def __iter__(self):
+        while True:
+            yield self.item
+    
