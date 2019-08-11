@@ -3,6 +3,7 @@
 import torch.nn as nn
 from torch.autograd import Variable
 import torch
+from src import utils
 
 
 class ConvLSTMCell(nn.Module):
@@ -251,8 +252,10 @@ class ConvLSTMLSTMRegression(nn.Module):
     
     
 class ConvLSTMGridWithGeophysicalInput(nn.Module):
-    def __init__(self, input_size, input_dim, geophysical_dim, convlstm_hidden_dim, conv_hidden_dim, convlstm_kernel_size, conv_kernel_size, num_convlstm_layers, num_conv_layers, conv_activation, dropout=0.0):
+    def __init__(self, input_size, input_dim, geophysical_dim, convlstm_hidden_dim, conv_hidden_dim, convlstm_kernel_size, conv_kernel_size, num_convlstm_layers, num_conv_layers, conv_activation, dropout=0.0, convlstm_out_resample_maps=None):
         super(ConvLSTMGridWithGeophysicalInput, self).__init__()
+        self.convlstm_out_resample_maps = convlstm_out_resample_maps
+        
         self.conv_lstm = ConvLSTM((input_size[0], input_size[1]), input_dim, convlstm_hidden_dim, convlstm_kernel_size, num_convlstm_layers, batch_first=True)
         self.dropout = nn.Dropout2d(p=dropout)
         if num_conv_layers == 1:
@@ -277,5 +280,9 @@ class ConvLSTMGridWithGeophysicalInput(nn.Module):
     def forward(self, input_tensor, geophysics_tensor, hidden_state=None):
         convlstm_out, hidden = self.conv_lstm(input_tensor, hidden_state=hidden_state)
         convlstm_out = self.dropout(convlstm_out[-1][:,-1,:,:,:])  # last output of last layer
+        
+        if self.convlstm_out_resample_maps is not None:
+            convlstm_out = utils.upsample_to_geophysical_input(convlstm_out, *self.convlstm_out_resample_maps)
+        
         conv_in = torch.cat([convlstm_out, geophysics_tensor], dim=1)
         return self.conv_out(conv_in)[:,0,:,:], hidden

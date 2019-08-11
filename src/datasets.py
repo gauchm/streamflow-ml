@@ -108,8 +108,11 @@ class RdrsGridDataset(Dataset):
     
     If out_lats and out_lons are not specified, will use RDRS grid as output resolution.
     Specifying out_lats/lons allows for different resolution of geophysical (non-time-series) inputs.
+    
+    If upsample=None, will not upsample. If 'input', will upsample RDRS data. 
+    If 'output', will not upsample, but generate upsampling map for ConvLSTM output.
     """
-    def __init__(self, rdrs_vars, seq_len, seq_steps, date_start, date_end, conv_scalers=None, exclude_stations=[], aggregate_daily=None, include_months=False, include_simulated_streamflow=False, out_lats=None, out_lons=None):
+    def __init__(self, rdrs_vars, seq_len, seq_steps, date_start, date_end, conv_scalers=None, exclude_stations=[], aggregate_daily=None, include_months=False, include_simulated_streamflow=False, out_lats=None, out_lons=None, upsample=None):
         self.date_start = date_start
         self.date_end = date_end
         self.seq_len = seq_len
@@ -127,10 +130,14 @@ class RdrsGridDataset(Dataset):
         self.in_lons = lons
         self.out_lats = self.in_lats if out_lats is None else np.tile(out_lats,len(out_lons)).reshape(len(out_lons),-1).T
         self.out_lons = self.in_lons if out_lons is None else np.tile(out_lons,len(out_lats)).reshape(len(out_lats),-1)
-        if out_lats is not None and out_lons is not None:
-            print('Creating upsampling map to quickly upsample during training/testing')
-            self.upsample_map_rows, self.upsample_map_cols = utils.map_to_geophysical_coords(self.in_lats, self.in_lons, 
-                                                                                             self.out_lats, self.out_lons)
+        self.upsample_map_rows, self.upsample_map_cols = None, None
+        if upsample is not None:
+            if out_lats is not None and out_lons is not None:
+                print('Creating upsampling map to quickly upsample during training/testing')
+                self.upsample_map_rows, self.upsample_map_cols = utils.map_to_geophysical_coords(self.in_lats, self.in_lons, 
+                                                                                                 self.out_lats, self.out_lons)
+            else:
+                raise Exception('Need out_lat/out_lon for upsampling.')
         
         if aggregate_daily is not None:
             self.n_conv_vars += sum(1 for agg in aggregate_daily if agg == 'minmax')
@@ -166,7 +173,7 @@ class RdrsGridDataset(Dataset):
         
         self.data_runoff = data_runoff[['date', 'station', 'runoff']]
         
-        # get station to (row, col) mapping
+        # get station to (row, col) mapping in output lat/lons
         self.station_to_index = {}
         for station in data_runoff['station'].unique():
             station_lat = data_runoff[data_runoff['station'] == station]['Lat'].values[0]
@@ -192,6 +199,8 @@ class RdrsGridDataset(Dataset):
                 end_of_day_index = rdrs_time_index[rdrs_time_index == date].index.values[0]
             
             date_data = rdrs_data[end_of_day_index - (self.seq_len * self.seq_steps) : end_of_day_index : self.seq_steps]
+            if upsample == 'input':
+                date_data = utils.upsample_to_geophysical_input(date_data, self.upsample_map_rows, self.upsample_map_cols, fill_value=np.nan)
             if include_months:
                 month_dummies = np.zeros((self.seq_len, 12, self.conv_height, self.conv_width))
                 for j in range(self.seq_len):
@@ -205,7 +214,7 @@ class RdrsGridDataset(Dataset):
         # Scale training data
         if self.conv_scalers is None:
             self.conv_scalers = list(preprocessing.StandardScaler() for _ in range(self.x_conv.shape[2]))
-        for i in range(self.n_conv_vars):
+        for i in range(self.n_conv_vars - (include_months * 12)):
             self.x_conv[:,:,i,:,:] = np.nan_to_num(self.conv_scalers[i].fit_transform(self.x_conv[:,:,i,:,:].reshape((-1, 1)))
                                                    .reshape(self.x_conv[:,:,i,:,:].shape))
 

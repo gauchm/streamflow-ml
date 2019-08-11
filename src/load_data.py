@@ -267,7 +267,7 @@ def load_landcover_reduced(values_to_use=None):
     Returns (array of shape (#landtypes, rows, cols), where the first dimension is the averaged amount of this landtype in cell (row, col), legend)
     """
     rdrs_data, rdrs_vars, rdrs_dates = load_rdrs_forcings(as_grid=True)
-    landcover_nc = nc.Dataset('../data/landcover_erie.nc', 'r')
+    landcover_nc = nc.Dataset('../data/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90_erie.nc', 'r')
     landcover_fullres = np.array(landcover_nc['Band1'][:])[::-1,:]
     
     legend = {1: 'Temperate or sub-polar needleleaf forest',
