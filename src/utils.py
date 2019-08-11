@@ -53,4 +53,4 @@ def upsample_to_geophysical_input(lowres_data, upsample_map_rows, upsample_map_c
     """
     Upsamples last two dimensions of lowres_data based on upsample_map, adding the 1-pixel border to lowres_data to avoid artifacts.
     """
-    return add_border(lowres_data, 'fill_value', fill_value=fill_value)[..., upsample_map_rows, upsample_map_cols]
+    return add_border(lowres_data, 'fill_value', fill_value=fill_value)[..., upsample_map_rows, upsample_map_cols].copy()

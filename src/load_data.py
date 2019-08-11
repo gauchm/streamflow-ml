@@ -423,7 +423,7 @@ def load_landcover(values_to_use=None, min_lat=None, max_lat=None, min_lon=None,
     
     landcover_nc.close()
     min_lat_idx, max_lat_idx, min_lon_idx, max_lon_idx = get_bounding_box_indices(min_lat, max_lat, min_lon, max_lon)
-    return landcover[:,max_lat_idx:min_lat_idx,min_lon_idx:max_lon_idx], legend
+    return landcover[:,max_lat_idx:min_lat_idx,min_lon_idx:max_lon_idx].copy(), legend
 
 
 def load_dem(min_lat=None, max_lat=None, min_lon=None, max_lon=None):
@@ -435,7 +435,7 @@ def load_dem(min_lat=None, max_lat=None, min_lon=None, max_lon=None):
     dem = dem_nc['Band1'][:][::-1,:].filled(np.nan)
 
     min_lat_idx, max_lat_idx, min_lon_idx, max_lon_idx = get_bounding_box_indices(min_lat, max_lat, min_lon, max_lon)
-    return dem[max_lat_idx:min_lat_idx,min_lon_idx:max_lon_idx]
+    return dem[max_lat_idx:min_lat_idx,min_lon_idx:max_lon_idx].copy()
 
 def load_groundwater(min_lat=None, max_lat=None, min_lon=None, max_lon=None):
     """
@@ -446,7 +446,7 @@ def load_groundwater(min_lat=None, max_lat=None, min_lon=None, max_lon=None):
     groundwater = groundwater_nc['Band1'][:][::-1,:].filled(np.nan)
     
     min_lat_idx, max_lat_idx, min_lon_idx, max_lon_idx = get_bounding_box_indices(min_lat, max_lat, min_lon, max_lon)
-    return groundwater[max_lat_idx:min_lat_idx,min_lon_idx:max_lon_idx]
+    return groundwater[max_lat_idx:min_lat_idx,min_lon_idx:max_lon_idx].copy()
 
 def load_soil(min_lat=None, max_lat=None, min_lon=None, max_lon=None):
     """
@@ -470,7 +470,7 @@ def load_soil(min_lat=None, max_lat=None, min_lon=None, max_lon=None):
             soil_nc.close()
     
     min_lat_idx, max_lat_idx, min_lon_idx, max_lon_idx = get_bounding_box_indices(min_lat, max_lat, min_lon, max_lon)
-    return soil[:,max_lat_idx:min_lat_idx,min_lon_idx:max_lon_idx], soil_legend
+    return soil[:,max_lat_idx:min_lat_idx,min_lon_idx:max_lon_idx].copy(), soil_legend
 
 
 def load_dem_lats_lons():
