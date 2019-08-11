@@ -479,8 +479,9 @@ def load_dem_lats_lons():
     Note that lats are decreasing with index.
     """
     dem_nc = nc.Dataset('../data/geophysical/dem/hydrosheds_n40-45w75-90_30sec.nc', 'r')
-    lats = dem_nc['lat'][:][::-1].filled(np.nan)
-    lons = dem_nc['lon'][:].filled(np.nan)
+    dem_nc.set_auto_mask(False)
+    lats = dem_nc['lat'][:][::-1]
+    lons = dem_nc['lon'][:]
     dem_nc.close()
     
     return lats, lons

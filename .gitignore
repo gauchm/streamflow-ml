@@ -1,5 +1,6 @@
 pickle/
 slurm-*.out
+data/geophysical/soil
 data/geophysical/dem
 data/geophysical/landcover
 data/geophysical/groundwater
