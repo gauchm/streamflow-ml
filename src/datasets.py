@@ -3,7 +3,7 @@ import pandas as pd
 from sklearn import preprocessing
 import torch
 from torch.utils.data import Dataset, IterableDataset
-from src import load_data
+from src import load_data, utils
 
 class RdrsDataset(Dataset):
     def __init__(self, rdrs_vars, seq_len, seq_steps, date_start, date_end, conv_scalers=None, fc_scalers=None, include_months=True):
@@ -129,8 +129,8 @@ class RdrsGridDataset(Dataset):
         self.out_lons = self.in_lons if out_lons is None else np.tile(out_lons,len(out_lats)).reshape(len(out_lats),-1)
         if out_lats is not None and out_lons is not None:
             print('Creating upsampling map to quickly upsample during training/testing')
-            self.upsample_map_rows, self.upsample_map_cols = map_to_geophysical_coords(self.in_lats, self.in_lons, 
-                                                                                       self.out_lats, self.out_lons)
+            self.upsample_map_rows, self.upsample_map_cols = utils.map_to_geophysical_coords(self.in_lats, self.in_lons, 
+                                                                                             self.out_lats, self.out_lons)
         
         if aggregate_daily is not None:
             self.n_conv_vars += sum(1 for agg in aggregate_daily if agg == 'minmax')
@@ -273,7 +273,8 @@ class GeophysicalGridDataset(IterableDataset):
         if self.scalers is None:
             self.scalers = list(preprocessing.StandardScaler() for _ in range(self.item.shape[0]))
         for i in range(self.item.shape[0]):
-            self.item[i,:,:] = np.nan_to_num(self.scalers[i].fit_transform(self.item[i,:,:].reshape((-1, 1))).reshape(self.item[i,:,:].shape))
+            self.item[i,:,:] = np.nan_to_num(self.scalers[i].fit_transform(self.item[i,:,:].reshape((-1, 1)))\
+                                                                 .reshape(self.item[i,:,:].shape))
             
         lats, lons = load_data.load_dem_lats_lons()
         self.lats = np.tile(lats,len(lons)).reshape(len(lons),-1).T[max_lat_idx:min_lat_idx,min_lon_idx:max_lon_idx]
@@ -282,25 +283,3 @@ class GeophysicalGridDataset(IterableDataset):
     def __iter__(self):
         while True:
             yield self.item
-
-
-def map_to_geophysical_coords(lowres_lats, lowres_lons, geophys_lats, geophys_lons):
-    """
-    Generates a mapping from high-resolution cell to (row, col) in low-resolution grid
-    """
-    upsample_map_rows = np.zeros(geophys_lats.shape, dtype=int)
-    upsample_map_cols = np.zeros(geophys_lats.shape, dtype=int)
-    for i in range(geophys_lats.shape[0]):
-        for j in range(geophys_lats.shape[1]):
-            highres_lat, highres_lon = geophys_lats[i,j], geophys_lons[i,j]
-            closest_lowres_cell = np.argmin(np.square(lowres_lats - highres_lat) + np.square(lowres_lons - highres_lon))
-            upsample_map_rows[i,j] = closest_lowres_cell // lowres_lats.shape[1]
-            upsample_map_cols[i,j] = closest_lowres_cell % lowres_lats.shape[1]
-    
-    return upsample_map_rows, upsample_map_cols
-
-def upsample_to_geophysical_input(lowres_data, upsample_map_rows, upsample_map_cols):
-    """
-    Upsamples lowres_data based on upsample_map
-    """
-    return lowres_data[upsample_map_rows, upsample_map_cols]
