@@ -27,27 +27,29 @@ def load_discharge_gr4j_vic():
     return data_runoff
 
 
-def load_simulated_streamflow():
+def load_simulated_streamflow(lats=None, lons=None):
     """
     Loads VIC-GRU+Raven streamflow simulation for all subbasins.
     Returns (DataFrame of simulations for each subbasin, dict subbasin -> (row, col) in the grid)
     """
     simulation_per_subbasin = pd.read_csv('../data/GRIP-E_Hydrographs_VIC-GRU_test2013+2014_allSubbasins.csv').drop(['time', 'hour', 'precip [mm/day]'], axis=1)
-
-    subbasin_nc = nc.Dataset('../data/simulations_shervan/Raven_input.nc', 'r')
-    subbasin_lat_lons = pd.DataFrame({'lat': subbasin_nc['lat'][:], 'lon': subbasin_nc['lon'][:]}, index=range(1,len(subbasin_nc['lat'][:])+1))
-    subbasin_nc.close()
+    subid_to_gauge = pd.read_csv('../data/VIC-GRU_subid2gauge.csv').set_index('SubId')[['ID', 'Name']].rename({'ID': 'StationID', 'Name': 'StationName'}, axis=1)
+    runoff_stations = load_discharge_gr4j_vic()['station'].unique()
+    subid_to_gauge = subid_to_gauge[subid_to_gauge['StationID'].isin(runoff_stations)]
+    subbasin_lat_lons = pd.read_csv('../data/simulations_shervan/GRIP-E_subbasin_outlet_info_20190812.csv').set_index('SubId')[['Outlet_lon', 'Outlet_lat']]
 
     simulation_per_subbasin = simulation_per_subbasin.rename(lambda c: int(c[3:].replace(' [m3/s]', '')) if c not in ['date', 'hour', 'precip [mm/day]'] else c, axis=1)
     simulation_per_subbasin = simulation_per_subbasin.set_index('date').transpose().unstack().reset_index().rename({'level_0': 'date', 'level_1': 'subbasin', 0: 'simulated_streamflow'}, axis=1)
     simulation_per_subbasin['date'] = pd.to_datetime(simulation_per_subbasin['date'])
     simulation_per_subbasin['date'] = simulation_per_subbasin['date'] - timedelta(days=1)  # Need to lag raven output back by one day.
     simulation_per_subbasin = simulation_per_subbasin.join(subbasin_lat_lons, on='subbasin')
+    simulation_per_subbasin = simulation_per_subbasin.join(subid_to_gauge, how='left', on='subbasin')
 
-    lats, lons = load_dem_lats_lons()
+    if lats is None:
+        lats, lons = load_dem_lats_lons()
     subbasin_outlet_to_index = {}
     for subbasin in simulation_per_subbasin['subbasin'].unique():
-        outlet_lat, outlet_lon = subbasin_lat_lons.loc[subbasin, ['lat', 'lon']]
+        outlet_lat, outlet_lon = subbasin_lat_lons.loc[subbasin, ['Outlet_lat', 'Outlet_lon']]
         # find nearest cell
         outlet_row = np.argmin(np.square(lats - outlet_lat))
         outlet_col = np.argmin(np.square(lons - outlet_lon))
@@ -133,6 +135,26 @@ def pickle_model(name, model, station, time_stamp, model_type='torch'):
     else:
         pickle.dump(model, open(file_name, 'wb'))
     print('Saved model as', file_name)
+    
+    
+def save_model_with_state(name, epoch, model, optimizer, time_stamp):
+    state = {
+        'epoch': epoch,
+        'state_dict': model.state_dict(),
+        'optimizer': optimizer.state_dict()
+    }
+    torch.save(state, '../pickle/models/{}_{}_state.pkl'.format(name, time_stamp))
+    pickle.dump(optimizer, open('../pickle/models/{}_{}_optimizer.pkl'.format(name, time_stamp), 'wb'))
+    pickle_model(name, model, 'allStations', time_stamp, model_type='torch')
+    
+    
+def load_model_and_state(name, time_stamp):
+    model = torch.load('../pickle/models/{}_allStations_{}.pkl'.format(name, time_stamp))
+    model.load_state_dict(state['state_dict'])
+    optimizer = pickle.load(open('../pickle/models/{}_{}_optimizer.pkl'.format(name, time_stamp), 'rb'))
+    optimizer.load_state_dict(state['optimizer'])
+    
+    return model, optimizer, epoch
 
 
 def load_train_test_gridded_dividedStreamflow():

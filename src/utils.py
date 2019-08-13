@@ -5,7 +5,7 @@ import torch
 
 def add_border(data, style, fill_value=np.nan):
     """
-    Add a one-pixel border to the last two dimension of the lowres image to avoid artefacts when upscaling.
+    Add a one-pixel border to the last two dimension of the lowres image to avoid artefacts when rescaling.
     style determines filling algorithm, either 'extrapolate', or 'fill_value'
     """
     new_shape = list(s for s in data.shape)
@@ -26,31 +26,31 @@ def add_border(data, style, fill_value=np.nan):
     return data_with_border
 
 
-def map_to_geophysical_coords(lowres_lats, lowres_lons, geophys_lats, geophys_lons):
+def map_to_coords(source_lats, source_lons, target_lats, target_lons):
     """
-    Generates a mapping from high-resolution cell to (row, col) in a low-resolution grid with a 1-pixel border.
+    Generates a mapping from target cell to (row, col) in the source grid plus a 1-pixel border.
     """
-    lowres_lats_with_border, lowres_lons_with_border = add_border(lowres_lats, 'extrapolate'), add_border(lowres_lons, 'extrapolate')
+    source_lats_with_border, source_lons_with_border = add_border(source_lats, 'extrapolate'), add_border(source_lons, 'extrapolate')
     
-    if len(geophys_lats.shape) == 1:
-        geophys_lats = np.tile(geophys_lats,len(geophys_lons)).reshape(len(geophys_lons),-1).T
-        geophys_lons = np.tile(geophys_lons,len(geophys_lats)).reshape(len(geophys_lats),-1)
+    if len(target_lats.shape) == 1:
+        target_lats = np.tile(target_lats,len(target_lons)).reshape(len(target_lons),-1).T
+        target_lons = np.tile(target_lons,len(target_lats)).reshape(len(target_lats),-1)
     
-    upsample_map_rows = np.zeros(geophys_lats.shape, dtype=int)
-    upsample_map_cols = np.zeros(geophys_lats.shape, dtype=int)
-    for i in range(geophys_lats.shape[0]):
-        for j in range(geophys_lats.shape[1]):
-            highres_lat, highres_lon = geophys_lats[i,j], geophys_lons[i,j]
-            closest_lowres_cell = np.argmin(np.square(lowres_lats_with_border - highres_lat) + 
-                                            np.square(lowres_lons_with_border - highres_lon))
-            upsample_map_rows[i,j] = closest_lowres_cell // lowres_lats_with_border.shape[1]
-            upsample_map_cols[i,j] = closest_lowres_cell % lowres_lats_with_border.shape[1]
+    resample_map_rows = np.zeros(target_lats.shape, dtype=int)
+    resample_map_cols = np.zeros(target_lats.shape, dtype=int)
+    for i in range(target_lats.shape[0]):
+        for j in range(target_lats.shape[1]):
+            target_lat, target_lon = target_lats[i,j], target_lons[i,j]
+            closest_source_cell = np.argmin(np.square(source_lats_with_border - target_lat) + 
+                                            np.square(source_lons_with_border - target_lon))
+            resample_map_rows[i,j] = closest_source_cell // source_lats_with_border.shape[1]
+            resample_map_cols[i,j] = closest_source_cell % source_lats_with_border.shape[1]
     
-    return upsample_map_rows, upsample_map_cols
+    return resample_map_rows, resample_map_cols
 
 
-def upsample_to_geophysical_input(lowres_data, upsample_map_rows, upsample_map_cols, fill_value=np.nan):
+def resample_by_map(lowres_data, resample_map_rows, resample_map_cols, fill_value=np.nan):
     """
-    Upsamples last two dimensions of lowres_data based on upsample_map, adding the 1-pixel border to lowres_data to avoid artifacts.
+    Resamples last two dimensions of lowres_data based on resample_map, adding the 1-pixel border to lowres_data to avoid artifacts.
     """
-    return add_border(lowres_data, 'fill_value', fill_value=fill_value)[..., upsample_map_rows, upsample_map_cols].copy()
+    return add_border(lowres_data, 'fill_value', fill_value=fill_value)[..., resample_map_rows, resample_map_cols]

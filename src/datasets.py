@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 from sklearn import preprocessing
 import torch
+import netCDF4 as nc
 from torch.utils.data import Dataset, IterableDataset
 from src import load_data, utils
 
@@ -109,10 +110,9 @@ class RdrsGridDataset(Dataset):
     If out_lats and out_lons are not specified, will use RDRS grid as output resolution.
     Specifying out_lats/lons allows for different resolution of geophysical (non-time-series) inputs.
     
-    If upsample=None, will not upsample. If 'input', will upsample RDRS data. 
-    If 'output', will not upsample, but generate upsampling map for ConvLSTM output.
+    If resample_rdrs, will resample RDRS from rotated lat/lon to lat/lon values.
     """
-    def __init__(self, rdrs_vars, seq_len, seq_steps, date_start, date_end, conv_scalers=None, exclude_stations=[], aggregate_daily=None, include_months=False, include_simulated_streamflow=False, out_lats=None, out_lons=None, upsample=None):
+    def __init__(self, rdrs_vars, seq_len, seq_steps, date_start, date_end, conv_scalers=None, exclude_stations=[], aggregate_daily=None, include_months=False, include_simulated_streamflow=False, resample_rdrs=False, out_lats=None, out_lons=None):
         self.date_start = date_start
         self.date_end = date_end
         self.seq_len = seq_len
@@ -128,16 +128,23 @@ class RdrsGridDataset(Dataset):
         
         self.in_lats = lats
         self.in_lons = lons
-        self.out_lats = self.in_lats if out_lats is None else np.tile(out_lats,len(out_lons)).reshape(len(out_lons),-1).T
-        self.out_lons = self.in_lons if out_lons is None else np.tile(out_lons,len(out_lats)).reshape(len(out_lats),-1)
-        self.upsample_map_rows, self.upsample_map_cols = None, None
-        if upsample is not None:
-            if out_lats is not None and out_lons is not None:
-                print('Creating upsampling map to quickly upsample during training/testing')
-                self.upsample_map_rows, self.upsample_map_cols = utils.map_to_geophysical_coords(self.in_lats, self.in_lons, 
-                                                                                                 self.out_lats, self.out_lons)
-            else:
-                raise Exception('Need out_lat/out_lon for upsampling.')
+        self.rdrs_target_lats = self.in_lats
+        self.rdrs_target_lons = self.in_lons
+        if resample_rdrs:
+            landcover_nc = nc.Dataset('../data/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90_erie.nc', 'r')
+            landcover_nc.set_auto_mask(False)
+            landcover_lats = landcover_nc['lat'][:][::-1]
+            landcover_lons = landcover_nc['lon'][:]
+            landcover_nc.close()
+
+            rdrs_target_lats = landcover_lats[::int(np.ceil(len(landcover_lats) / rdrs_data.shape[2]))]
+            rdrs_target_lons = landcover_lons[::int(np.ceil(len(landcover_lons) / rdrs_data.shape[3]))]
+            self.rdrs_target_lats = np.tile(rdrs_target_lats,len(rdrs_target_lons)).reshape(len(rdrs_target_lons),-1).T
+            self.rdrs_target_lons = np.tile(rdrs_target_lons,len(rdrs_target_lats)).reshape(len(rdrs_target_lats),-1)
+            self.rdrs_resample_maps = utils.map_to_coords(self.in_lats, self.in_lons, self.rdrs_target_lats, self.rdrs_target_lons)
+        
+        self.out_lats = self.rdrs_target_lats if out_lats is None else np.tile(out_lats,len(out_lons)).reshape(len(out_lons),-1).T
+        self.out_lons = self.rdrs_target_lons if out_lons is None else np.tile(out_lons,len(out_lats)).reshape(len(out_lats),-1)
         
         if aggregate_daily is not None:
             self.n_conv_vars += sum(1 for agg in aggregate_daily if agg == 'minmax')
@@ -199,8 +206,8 @@ class RdrsGridDataset(Dataset):
                 end_of_day_index = rdrs_time_index[rdrs_time_index == date].index.values[0]
             
             date_data = rdrs_data[end_of_day_index - (self.seq_len * self.seq_steps) : end_of_day_index : self.seq_steps]
-            if upsample == 'input':
-                date_data = utils.upsample_to_geophysical_input(date_data, self.upsample_map_rows, self.upsample_map_cols, fill_value=np.nan)
+            if rdrs_target_lats is not None:
+                date_data = utils.resample_by_map(date_data, *self.rdrs_resample_maps, fill_value=np.nan)
             if include_months:
                 month_dummies = np.zeros((self.seq_len, 12, self.conv_height, self.conv_width))
                 for j in range(self.seq_len):
@@ -219,7 +226,9 @@ class RdrsGridDataset(Dataset):
                                                    .reshape(self.x_conv[:,:,i,:,:].shape))
 
         if include_simulated_streamflow:
-            self.simulated_streamflow, self.outlet_to_row_col = load_data.load_simulated_streamflow()
+            simulated_streamflow, self.outlet_to_row_col = load_data.load_simulated_streamflow(self.out_lats[:,0], self.out_lons[0])
+            self.simulated_streamflow = simulated_streamflow[(simulated_streamflow['date'] >= self.date_start) & \
+                                                             (simulated_streamflow['date'] <= self.date_end)]
             # Create a tensor of shape (#days, height, width) of target values (only the cells of virtual gauges get populated)
             self.y_sim = torch.zeros((len(self.dates), self.out_lats.shape[0], self.out_lats.shape[1]))
              # Mask is True iff this cell is a subbasin's outlet
@@ -247,8 +256,7 @@ class RdrsGridDataset(Dataset):
                     
     def __getitem__(self, index):
         if self.include_simulated_streamflow:
-            return {'x_conv': self.x_conv[index,:,:,:,:], 'y': self.y[index], 'mask': self.mask[index],
-                    'y_sim': self.y_sim[index], 'mask_sim': self.mask_sim}
+            return {'x_conv': self.x_conv[index,:,:,:,:], 'y': self.y[index], 'mask': self.mask[index], 'y_sim': self.y_sim[index]}
         else:
             return {'x_conv': self.x_conv[index,:,:,:,:], 'y': self.y[index], 'mask': self.mask[index]}
     
@@ -258,9 +266,7 @@ class RdrsGridDataset(Dataset):
     
 class GeophysicalGridDataset(IterableDataset):
     """ Dataset of geophysical gridded inputs. """
-    def __init__(self, dem=True, landcover=True, soil=True, groundwater=True, min_lat=None, max_lat=None, min_lon=None, max_lon=None, landcover_types=None, scalers=None):
-
-        self.scalers = scalers
+    def __init__(self, dem=True, landcover=True, soil=True, groundwater=True, min_lat=None, max_lat=None, min_lon=None, max_lon=None, landcover_types=None):
         
         min_lat_idx, max_lat_idx, min_lon_idx, max_lon_idx = load_data.get_bounding_box_indices(min_lat, max_lat, min_lon, max_lon)
         self.item = np.zeros((0,min_lat_idx - max_lat_idx,max_lon_idx - min_lon_idx))
@@ -278,16 +284,17 @@ class GeophysicalGridDataset(IterableDataset):
             self.groundwater = load_data.load_groundwater(min_lat, max_lat, min_lon, max_lon)
             self.item = np.concatenate([self.item, self.groundwater.reshape((1, self.groundwater.shape[0], self.groundwater.shape[1]))], axis=0)
             
-        # Scale training data
-        if self.scalers is None:
-            self.scalers = list(preprocessing.StandardScaler() for _ in range(self.item.shape[0]))
+        self.scalers = list(preprocessing.StandardScaler() for _ in range(self.item.shape[0]))
         for i in range(self.item.shape[0]):
             self.item[i,:,:] = np.nan_to_num(self.scalers[i].fit_transform(self.item[i,:,:].reshape((-1, 1)))\
                                                                  .reshape(self.item[i,:,:].shape))
-            
+        self.item = torch.from_numpy(self.item).float()
+        
         lats, lons = load_data.load_dem_lats_lons()
-        self.lats = np.tile(lats,len(lons)).reshape(len(lons),-1).T[max_lat_idx:min_lat_idx,min_lon_idx:max_lon_idx]
-        self.lons = np.tile(lons,len(lats)).reshape(len(lats),-1)[max_lat_idx:min_lat_idx,min_lon_idx:max_lon_idx]
+        self.lats = np.tile(lats,len(lons)).reshape(len(lons),-1).T[max_lat_idx:min_lat_idx,min_lon_idx:max_lon_idx].copy()
+        self.lons = np.tile(lons,len(lats)).reshape(len(lats),-1)[max_lat_idx:min_lat_idx,min_lon_idx:max_lon_idx].copy()
+        
+        self.shape = self.item.shape
         
     def __iter__(self):
         while True:
