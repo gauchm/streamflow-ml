@@ -252,23 +252,25 @@ class ConvLSTMLSTMRegression(nn.Module):
     
     
 class ConvLSTMGridWithGeophysicalInput(nn.Module):
-    def __init__(self, input_size, input_dim, geophysical_dim, convlstm_hidden_dim, conv_hidden_dim, convlstm_kernel_size, conv_kernel_size, num_convlstm_layers, num_conv_layers, conv_activation, dropout=0.0, geophysical_size=None):
+    def __init__(self, input_size, input_dim, geophysical_dim, convlstm_hidden_dim, conv_hidden_dim, convlstm_kernel_size, conv_kernel_size, num_convlstm_layers, num_conv_layers, conv_activation, dropout=0.0, geophysical_size=None, feed_timesteps=1):
         super(ConvLSTMGridWithGeophysicalInput, self).__init__()
-        
+        self.feed_timesteps = feed_timesteps
         self.conv_lstm = ConvLSTM((input_size[0], input_size[1]), input_dim, convlstm_hidden_dim, convlstm_kernel_size, num_convlstm_layers, batch_first=True)
         self.dropout = nn.Dropout2d(p=dropout)
         self.upsample = nn.Identity() 
-        if input_size[0] != geophysical_size[0] or input_size[1] != geophysical_size[1]:
+        if geophysical_size is not None and (input_size[0] != geophysical_size[0] or input_size[1] != geophysical_size[1]):
             stride = geophysical_size[0] // input_size[0], geophysical_size[1] // input_size[1]
             upsample_kernel = (geophysical_size[0] + stride[0] * (1 - input_size[0]), geophysical_size[1] + stride[1] * (1 - input_size[1]))
-            self.upsample = nn.ConvTranspose2d(convlstm_hidden_dim[-1], convlstm_hidden_dim[-1], upsample_kernel, stride=stride)
+            self.upsample = nn.ConvTranspose2d(convlstm_hidden_dim[-1] * feed_timesteps, convlstm_hidden_dim[-1] * feed_timesteps, 
+                                               upsample_kernel, stride=stride)
         if num_conv_layers == 1:
             pad = conv_kernel_size[0][0] // 2, conv_kernel_size[0][1] // 2
-            self.conv_out = nn.Conv2d(convlstm_hidden_dim[-1] + geophysical_dim, 1, conv_kernel_size[0], padding=pad)
+            self.conv_out = nn.Conv2d(convlstm_hidden_dim[-1] * feed_timesteps + geophysical_dim, 1, conv_kernel_size[0], padding=pad)
         else:
             pad = conv_kernel_size[0][0] // 2, conv_kernel_size[0][1] // 2
-            conv_layers = [nn.BatchNorm2d(convlstm_hidden_dim[-1] + geophysical_dim), 
-                           nn.Conv2d(convlstm_hidden_dim[-1] + geophysical_dim, conv_hidden_dim[0], conv_kernel_size[0], padding=pad),
+            conv_layers = [nn.BatchNorm2d(convlstm_hidden_dim[-1] * feed_timesteps + geophysical_dim), 
+                           nn.Conv2d(convlstm_hidden_dim[-1] * feed_timesteps + geophysical_dim, conv_hidden_dim[0], 
+                                     conv_kernel_size[0], padding=pad),
                            nn.Dropout(p=dropout), conv_activation()]
             for i in range(1, num_conv_layers - 1):
                 pad = conv_kernel_size[i][0] // 2, conv_kernel_size[i][1] // 2
@@ -283,7 +285,9 @@ class ConvLSTMGridWithGeophysicalInput(nn.Module):
         
     def forward(self, input_tensor, geophysics_tensor, hidden_state=None):
         convlstm_out, hidden = self.conv_lstm(input_tensor, hidden_state=hidden_state)
-        convlstm_out = self.dropout(convlstm_out[-1][:,-1,:,:,:])  # last output of last layer
+        # last feed_timesteps outputs of last layer
+        convlstm_out = convlstm_out[-1][:,-self.feed_timesteps:,:,:,:].reshape((convlstm_out[-1].shape[0],-1,*convlstm_out[-1].shape[3:]))
+        convlstm_out = self.dropout(convlstm_out)
         upsampled_convlstm_out = self.upsample(convlstm_out)
         conv_in = torch.cat([upsampled_convlstm_out, geophysics_tensor], dim=1)
         return self.conv_out(conv_in)[:,0,:,:], hidden
