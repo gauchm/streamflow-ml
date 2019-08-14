@@ -54,6 +54,8 @@ class NSELoss(nn.Module):
     def __init__(self):
         super(NSELoss, self).__init__()
         
-    def forward(self, prediction, target):
-        nses = torch.sum(torch.pow(prediction - target, 2), dim=0) / torch.sum(torch.pow(target - target.mean(dim=0), 2), dim=0)
+    def forward(self, prediction, target, mean=None):
+        if mean is None:
+            mean = target.mean(dim=0)
+        nses = torch.sum(torch.pow(prediction - target, 2), dim=0) / torch.sum(torch.pow(target - mean, 2), dim=0)
         return nses.mean()
