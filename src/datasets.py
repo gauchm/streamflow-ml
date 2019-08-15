@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import pandas as pd
 from sklearn import preprocessing
@@ -5,6 +6,9 @@ import torch
 import netCDF4 as nc
 from torch.utils.data import Dataset, IterableDataset
 from src import load_data, utils
+
+module_dir = os.path.dirname(os.path.abspath(__file__))
+
 
 class RdrsDataset(Dataset):
     """RDRS dataset where target is a list of streamflow values per gauging station.
@@ -46,24 +50,24 @@ class RdrsDataset(Dataset):
         self.conv_height = rdrs_data.shape[2]
         self.conv_width = rdrs_data.shape[3]
         
-        data_runoff = load_data.load_discharge_gr4j_vic()
-        data_runoff = data_runoff[~pd.isna(data_runoff['runoff'])]
+        data_streamflow = load_data.load_discharge_gr4j_vic()
+        data_streamflow = data_streamflow[~pd.isna(data_streamflow['runoff'])]
         if include_months:
-            data_runoff = data_runoff.join(pd.get_dummies(data_runoff['date'].dt.month, prefix='month'))
-        data_runoff = data_runoff[(data_runoff['date'] >= self.date_start) & (data_runoff['date'] <= self.date_end)]
-        gauge_info = pd.read_csv('../data/gauge_info.csv')[['ID', 'Lat', 'Lon']]
-        data_runoff = pd.merge(data_runoff, gauge_info, left_on='station', right_on='ID').drop('ID', axis=1)
+            data_streamflow = data_streamflow.join(pd.get_dummies(data_streamflow['date'].dt.month, prefix='month'))
+        data_streamflow = data_streamflow[(data_streamflow['date'] >= self.date_start) & (data_streamflow['date'] <= self.date_end)]
+        gauge_info = pd.read_csv(module_dir + '/../data/gauge_info.csv')[['ID', 'Lat', 'Lon']]
+        data_streamflow = pd.merge(data_streamflow, gauge_info, left_on='station', right_on='ID').drop('ID', axis=1)
         
         # sort by date then station so that consecutive values have increasing dates (except for station cutoffs)
         # this way, a stateful lstm can be fed date ranges.
-        data_runoff = data_runoff.sort_values(by=['station', 'date']).reset_index(drop='True')
-        self.data_runoff = data_runoff[['date', 'station', 'runoff']]
+        data_streamflow = data_streamflow.sort_values(by=['station', 'date']).reset_index(drop='True')
+        self.data_runoff = data_streamflow[['date', 'station', 'runoff']]
         
         # conv input shape: (samples, seq_len, variables, height, width)
         # But: x_conv is the same for all stations for the same date, so we only generate #dates samples 
         #      and feed them multiple times (as many times as we have stations for that date)
-        self.x_conv = np.zeros((len(data_runoff['date'].unique()), seq_len, self.n_conv_vars, self.conv_height, self.conv_width))       
-        self.dates = np.sort(data_runoff['date'].unique())
+        self.x_conv = np.zeros((len(data_streamflow['date'].unique()), seq_len, self.n_conv_vars, self.conv_height, self.conv_width))       
+        self.dates = np.sort(data_streamflow['date'].unique())
         i = 0
         for date in self.dates:
             # For each day that is to be predicted, cut out a sequence that ends with that day's 23:00 and is seq_len long
@@ -78,20 +82,20 @@ class RdrsDataset(Dataset):
             self.x_conv[:,:,i,:,:] = np.nan_to_num(self.conv_scalers[i].fit_transform(self.x_conv[:,:,i,:,:].reshape((-1, 1)))
                                                    .reshape(self.x_conv[:,:,i,:,:].shape))
 
-        self.x_fc = data_runoff.drop(['date', 'station', 'runoff'], axis=1).to_numpy()
-        fc_var_names = data_runoff.drop(['date', 'station', 'runoff'], axis=1).columns
+        self.x_fc = data_streamflow.drop(['date', 'station', 'runoff'], axis=1).to_numpy()
+        fc_var_names = data_streamflow.drop(['date', 'station', 'runoff'], axis=1).columns
         vars_to_scale = list(c for c in fc_var_names if not c.startswith('month'))
         self.n_fc_vars = len(fc_var_names)
         if self.fc_scalers is None:
             self.fc_scalers = list(preprocessing.StandardScaler() for _ in range(self.n_fc_vars))
         for i in range(self.n_fc_vars):
             if fc_var_names[i] in vars_to_scale:
-                to_transform = data_runoff[fc_var_names[i]].to_numpy().reshape((-1,1))
+                to_transform = data_streamflow[fc_var_names[i]].to_numpy().reshape((-1,1))
                 self.x_fc[:,i] = np.nan_to_num(self.fc_scalers[i].fit_transform(to_transform).reshape(self.x_fc[:,i].shape))
         
         self.x_conv = torch.from_numpy(self.x_conv).float()
         self.x_fc = torch.from_numpy(self.x_fc).float()
-        self.y = torch.from_numpy(data_runoff['runoff'].to_numpy()).float()
+        self.y = torch.from_numpy(data_streamflow['runoff'].to_numpy()).float()
         
     def __getitem__(self, index):
         """Fetches a sample of input/target values.
@@ -175,7 +179,8 @@ class RdrsGridDataset(Dataset):
         mask: bool tensor of shape (#dates, #rows, #cols), True iff we have an actual streamflow value for this cell at this date
         mask_sim: bool tensor of shape (#dates, #rows, #cols), True iff this cell is outlet of its subbasin.
     """
-    def __init__(self, rdrs_vars, seq_len, seq_steps, date_start, date_end, conv_scalers=None, exclude_stations=[], aggregate_daily=None, include_months=False, include_simulated_streamflow=False, resample_rdrs=False, out_lats=None, out_lons=None):
+    def __init__(self, rdrs_vars, seq_len, seq_steps, date_start, date_end, conv_scalers=None, exclude_stations=[], aggregate_daily=None, 
+                 include_months=False, include_simulated_streamflow=False, resample_rdrs=False, out_lats=None, out_lons=None):
         """Initializes the dataset.
         
         Args:
@@ -188,7 +193,8 @@ class RdrsGridDataset(Dataset):
             exclude_stations (list or None): If provided, will exclude these stations from the dataset.
             aggregate_daily (list or None): If provided, will aggregate each RDRS time-series variable to daily values as specified. Allowed values are 'minmax', 'sum'
             include_months (bool): If True, the time-series input data will contain one-hot-encoded months as features.
-            include_simulated_streamflow (bool): If True, the returned item dicts will contain both 'y' -> actual gauge stations, 'y_sim' -> simulated gauges. Else, the dict will not contain 'y_sim'.
+            include_simulated_streamflow (bool): If True, the returned item dicts will contain both 'y' -> actual gauge stations, 'y_sim' -> simulated gauges. 
+                                                 Else, the dict will not contain 'y_sim'.
             resample_rdrs: If True, will resample RDRS from rotated lat/lon to lat/lon values.
             out_lats, out_lons: If not specified, will use RDRS grid as output resolution. Else, the target value resolution will be in these coordinates.
         """
@@ -210,7 +216,7 @@ class RdrsGridDataset(Dataset):
         self.rdrs_target_lats = self.in_lats
         self.rdrs_target_lons = self.in_lons
         if resample_rdrs:
-            landcover_nc = nc.Dataset('../data/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90_erie.nc', 'r')
+            landcover_nc = nc.Dataset(module_dir + '/../data/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90_erie.nc', 'r')
             landcover_nc.set_auto_mask(False)
             landcover_lats = landcover_nc['lat'][:][::-1]
             landcover_lons = landcover_nc['lon'][:]
@@ -246,24 +252,24 @@ class RdrsGridDataset(Dataset):
             rdrs_time_index = rdrs_time_index_daily
             rdrs_data = rdrs_daily
         
-        data_runoff = load_data.load_discharge_gr4j_vic()
-        data_runoff = data_runoff[~pd.isna(data_runoff['runoff'])]
-        data_runoff = data_runoff[(data_runoff['date'] >= self.date_start) & (data_runoff['date'] <= self.date_end)]
-        gauge_info = pd.read_csv('../data/gauge_info.csv')[['ID', 'Lat', 'Lon']]
-        data_runoff = pd.merge(data_runoff, gauge_info, left_on='station', right_on='ID').drop('ID', axis=1)
-        data_runoff = data_runoff.sort_values(by=['date']).reset_index(drop='True')
+        data_streamflow = load_data.load_discharge_gr4j_vic()
+        data_streamflow = data_streamflow[~pd.isna(data_streamflow['runoff'])]
+        data_streamflow = data_streamflow[(data_streamflow['date'] >= self.date_start) & (data_streamflow['date'] <= self.date_end)]
+        gauge_info = pd.read_csv(module_dir + '/../data/gauge_info.csv')[['ID', 'Lat', 'Lon']]
+        data_streamflow = pd.merge(data_streamflow, gauge_info, left_on='station', right_on='ID').drop('ID', axis=1)
+        data_streamflow = data_streamflow.sort_values(by=['date']).reset_index(drop='True')
             
         if len(exclude_stations) > 0:
-            self.data_runoff_all_stations = data_runoff[['date', 'station', 'runoff']].copy()
-            data_runoff = data_runoff[~data_runoff['station'].isin(exclude_stations)].reset_index(drop=True)
+            self.data_runoff_all_stations = data_streamflow[['date', 'station', 'runoff']].copy()
+            data_streamflow = data_streamflow[~data_streamflow['station'].isin(exclude_stations)].reset_index(drop=True)
         
-        self.data_runoff = data_runoff[['date', 'station', 'runoff']]
+        self.data_runoff = data_streamflow[['date', 'station', 'runoff']]
         
         # get station to (row, col) mapping in output lat/lons
         self.station_to_index = {}
-        for station in data_runoff['station'].unique():
-            station_lat = data_runoff[data_runoff['station'] == station]['Lat'].values[0]
-            station_lon = data_runoff[data_runoff['station'] == station]['Lon'].values[0]
+        for station in data_streamflow['station'].unique():
+            station_lat = data_streamflow[data_streamflow['station'] == station]['Lat'].values[0]
+            station_lon = data_streamflow[data_streamflow['station'] == station]['Lon'].values[0]
             # find nearest cell
             station_idx = np.argmin(np.square(self.out_lats - station_lat) + np.square(self.out_lons - station_lon))
             station_row = station_idx // self.out_lons.shape[1]
@@ -274,8 +280,8 @@ class RdrsGridDataset(Dataset):
             self.n_conv_vars += 12
         
         # conv input shape: (samples, seq_len, variables, height, width)
-        self.x_conv = np.zeros((len(data_runoff['date'].unique()), seq_len, self.n_conv_vars, self.conv_height, self.conv_width))       
-        self.dates = np.sort(data_runoff['date'].unique())
+        self.x_conv = np.zeros((len(data_streamflow['date'].unique()), seq_len, self.n_conv_vars, self.conv_height, self.conv_width))       
+        self.dates = np.sort(data_streamflow['date'].unique())
         i = 0
         for date in self.dates:
             # For each day that is to be predicted, cut out a sequence that ends with that day's 23:00 and is seq_len long
@@ -285,7 +291,7 @@ class RdrsGridDataset(Dataset):
                 end_of_day_index = rdrs_time_index[rdrs_time_index == date].index.values[0]
             
             date_data = rdrs_data[end_of_day_index - (self.seq_len * self.seq_steps) : end_of_day_index : self.seq_steps]
-            if rdrs_target_lats is not None:
+            if resample_rdrs:
                 date_data = utils.resample_by_map(date_data, *self.rdrs_resample_maps, fill_value=np.nan)
             if include_months:
                 month_dummies = np.zeros((self.seq_len, 12, self.conv_height, self.conv_width))
@@ -326,13 +332,13 @@ class RdrsGridDataset(Dataset):
         self.y = torch.zeros((len(self.dates), self.out_lats.shape[0], self.out_lats.shape[1]))
         # Mask is True iff we have an actual streamflow value for this cell at this date
         self.mask = torch.zeros((len(self.dates), self.out_lats.shape[0], self.out_lats.shape[1]), dtype=torch.bool)
-        for station in data_runoff['station'].unique():
+        for station in data_streamflow['station'].unique():
             row, col = self.station_to_index[station]
-            station_runoff = data_runoff[data_runoff['station']==station].set_index('date')
+            station_streamflow = data_streamflow[data_streamflow['station']==station].set_index('date')
             for i in range(len(self.dates)):
-                if self.dates[i] in station_runoff.index:
+                if self.dates[i] in station_streamflow.index:
                     self.mask[i, row, col] = True
-                    self.y[i, row, col] = station_runoff.loc[self.dates[i], 'runoff']
+                    self.y[i, row, col] = station_streamflow.loc[self.dates[i], 'runoff']
         self.y_means = self.y.mean(dim=0)  # Used for NSE calculation
                     
     def __getitem__(self, index):

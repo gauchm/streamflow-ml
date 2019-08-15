@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import pickle
 import torch
 
+module_dir = os.path.dirname(os.path.abspath(__file__))
 
 landcover_legend = {1: 'Temperate or sub-polar needleleaf forest',
         2:  'Sub-polar taiga needleleaf forest',
@@ -32,9 +33,9 @@ def load_discharge_gr4j_vic():
     """Loads observed discharge for gauging stations in GRIP-E objective 1 & 2.
     
     Returns:
-        A pd.DataFrame with columns [date, station, runoff], where runoff contains the streamflow.
+        A pd.DataFrame with columns [date, station, runoff], where 'runoff' contains the streamflow.
     """
-    dir = '../data/ObservedDischarge_GR4J+VIC'
+    dir = module_dir + '/../data/ObservedDischarge_GR4J+VIC'
     data_streamflow = pd.DataFrame(columns=['date','runoff', 'station'])
     
     for f in os.listdir(dir):
@@ -64,13 +65,13 @@ def load_simulated_streamflow(lats=None, lons=None):
         A pd.DataFrame of simulations for each subbasin
         A dict mapping each subbasin id to (row, col) in the grid of lat and lon values.
     """
-    simulation_per_subbasin = pd.read_csv('../data/GRIP-E_Hydrographs_VIC-GRU_test2013+2014_allSubbasins.csv').drop(['time', 'hour', 'precip [mm/day]'], axis=1)
-    subid_to_gauge = pd.read_csv('../data/VIC-GRU_subid2gauge.csv').set_index('SubId')[['ID', 'Name']].rename({'ID': 'StationID', 'Name': 'StationName'}, axis=1)
+    simulation_per_subbasin = pd.read_csv(module_dir + '/../data/GRIP-E_Hydrographs_VIC-GRU_test2013+2014_allSubbasins.csv').drop(['time', 'hour', 'precip [mm/day]'], axis=1)
+    subid_to_gauge = pd.read_csv(module_dir + '/../data/VIC-GRU_subid2gauge.csv').set_index('SubId')[['ID', 'Name']].rename({'ID': 'StationID', 'Name': 'StationName'}, axis=1)
     
     # Load actual gauge stations
     streamflow_stations = load_discharge_gr4j_vic()['station'].unique()
     subid_to_gauge = subid_to_gauge[subid_to_gauge['StationID'].isin(streamflow_stations)]
-    subbasin_lat_lons = pd.read_csv('../data/simulations_shervan/GRIP-E_subbasin_outlet_info_20190812.csv').set_index('SubId')[['Outlet_lon', 'Outlet_lat']]
+    subbasin_lat_lons = pd.read_csv(module_dir + '/../data/simulations_shervan/GRIP-E_subbasin_outlet_info_20190812.csv').set_index('SubId')[['Outlet_lon', 'Outlet_lat']]
 
     simulation_per_subbasin = simulation_per_subbasin.rename(lambda c: int(c[3:].replace(' [m3/s]', '')) if c not in ['date', 'hour', 'precip [mm/day]'] else c, axis=1)
     simulation_per_subbasin = simulation_per_subbasin.set_index('date').transpose().unstack().reset_index().rename({'level_0': 'date', 'level_1': 'subbasin', 0: 'simulated_streamflow'}, axis=1)
@@ -110,7 +111,7 @@ def load_rdrs_forcings(as_grid=False, include_lat_lon=False):
             If include_lat_lon: An array of length #rows of latitudes and an array of length #cols of longitudes in rotated lat/lon CRS.
     """
     forcing_variables = ['RDRS_FB_SFC', 'RDRS_FI_SFC', 'RDRS_HU_40m', 'RDRS_P0_SFC', 'RDRS_PR0_SFC', 'RDRS_TT_40m', 'RDRS_UVC_40m', 'RDRS_WDC_40m']
-    rdrs_nc = nc.Dataset('../data/RDRS_CaPA24hr_forcings_final.nc', 'r')
+    rdrs_nc = nc.Dataset(module_dir + '/../data/RDRS_CaPA24hr_forcings_final.nc', 'r')
     
     if as_grid:
         time_steps, nrows, ncols = rdrs_nc[forcing_variables[0]].shape
@@ -125,7 +126,7 @@ def load_rdrs_forcings(as_grid=False, include_lat_lon=False):
         rdrs_nc.close()
         return return_values
     else:
-        rdrs_data = pd.DataFrame(index=pd.date_range('2010-01-01 7:00', '2015-01-01 7:00', freq='H')) # Using 7:00 because forcings are UTC, while runoff is local time
+        rdrs_data = pd.DataFrame(index=pd.date_range('2010-01-01 7:00', '2015-01-01 7:00', freq='H')) # Using 7:00 because forcings are UTC, while streamflow is local time
 
         for var in forcing_variables:
             var_data = pd.DataFrame(rdrs_nc[var][:].reshape(43825,34*39))
@@ -173,7 +174,7 @@ def pickle_results(name, results, time_stamp):
             result_df = result_df.append(df.reset_index())
     
     file_name = '{}_{}.pkl'.format(name, time_stamp)
-    pickle.dump(result_df, open('../pickle/results/' + file_name, 'wb'))
+    pickle.dump(result_df, open(module_dir + '/../pickle/results/' + file_name, 'wb'))
     
     return file_name
 
@@ -190,7 +191,7 @@ def pickle_model(name, model, station, time_stamp, model_type='torch'):
         time_stamp: Time stamp of model run, used for unique identification.
         model_type (str): If 'torch', will use torch.save to pickle the model. If 'xgb' or other, will use pickle.dump.
     """
-    file_name = '../pickle/models/{}_{}_{}.pkl'.format(name, station, time_stamp)
+    file_name = module_dir + '/../pickle/models/{}_{}_{}.pkl'.format(name, station, time_stamp)
     if model_type == 'torch':
         torch.save(model, file_name)
     elif model_type == 'xgb':
@@ -217,8 +218,8 @@ def save_model_with_state(name, epoch, model, optimizer, time_stamp):
         'state_dict': model.state_dict(),
         'optimizer': optimizer.state_dict()
     }
-    torch.save(state, '../pickle/models/{}_{}_state.pkl'.format(name, time_stamp))
-    pickle.dump(optimizer, open('../pickle/models/{}_{}_optimizer.pkl'.format(name, time_stamp), 'wb'))
+    torch.save(state, module_dir + '/../pickle/models/{}_{}_state.pkl'.format(name, time_stamp))
+    pickle.dump(optimizer, open(module_dir + '/../pickle/models/{}_{}_optimizer.pkl'.format(name, time_stamp), 'wb'))
     pickle_model(name, model, 'allStations', time_stamp, model_type='torch')
     
     
@@ -233,9 +234,9 @@ def load_model_and_state(name, time_stamp):
     Returns:
         A tuple (model, optimizer, epoch).
     """
-    model = torch.load('../pickle/models/{}_allStations_{}.pkl'.format(name, time_stamp))
+    model = torch.load(module_dir + '/../pickle/models/{}_allStations_{}.pkl'.format(name, time_stamp))
     model.load_state_dict(state['state_dict'])
-    optimizer = pickle.load(open('../pickle/models/{}_{}_optimizer.pkl'.format(name, time_stamp), 'rb'))
+    optimizer = pickle.load(open(module_dir + '/../pickle/models/{}_{}_optimizer.pkl'.format(name, time_stamp), 'rb'))
     optimizer.load_state_dict(state['optimizer'])
     
     return model, optimizer, epoch
@@ -250,7 +251,7 @@ def load_train_test_gridded_dividedStreamflow():
     Returns:
         A dict mapping stations to pd.DataFrames of hourly streamflow.
     """
-    file_name = '../data/train_test/gridded_dividedStreamflow.h5'
+    file_name = module_dir + '/../data/train_test/gridded_dividedStreamflow.h5'
     if not os.path.isfile(file_name):
         history = 7 * 24
         data_streamflow = load_discharge_gr4j_vic()
@@ -292,8 +293,8 @@ def load_train_test_gridded_aggregatedForcings(include_all_forcing_vars=False, i
     Returns:
         A dict mapping stations to pd.DataFrames of day-aggregated forcings.
     """
-    file_name = '../data/train_test/gridded_aggregatedForcings{}{}.h5'.format('_all_vars' if include_all_forcing_vars else '', 
-                                                                              '_all_cells' if include_all_cells else '')
+    file_name = module_dir + '/../data/train_test/gridded_aggregatedForcings{}{}.h5'.format('_all_vars' if include_all_forcing_vars else '', 
+                                                                                            '_all_cells' if include_all_cells else '')
     if not os.path.isfile(file_name):
         history = 7
         data_streamflow = load_discharge_gr4j_vic()
@@ -340,7 +341,7 @@ def load_train_test_lstm():
     Returns:
         A dict mapping stations to pd.DataFrames with hourly RDRS variables for the station's subwatershed. Also includes one-hot-encoded months.
     """
-    file_name = '../data/train_test/lstm.h5'
+    file_name = module_dir + '/../data/train_test/lstm.h5'
     if not os.path.isfile(file_name):
         data_streamflow = load_discharge_gr4j_vic()
         # For each station, read which grid cells belong to its subwatershed
@@ -367,7 +368,7 @@ def get_station_cell_mapping():
     Returns:
         A pd.DataFrame with one row per RDRS grid cell, mapping each cell to a station.
     """
-    return pd.read_csv('../data/station_cell_mapping.csv', skiprows=1, names=['station', 'lat', 'lon', 'row', 'col', 'area'])
+    return pd.read_csv(module_dir + '/../data/station_cell_mapping.csv', skiprows=1, names=['station', 'lat', 'lon', 'row', 'col', 'area'])
 
 
 def read_station_data_dict(file_name):
@@ -397,7 +398,7 @@ def load_landcover_reduced(values_to_use=None):
         A list of the names of the returned landtypes
     """
     rdrs_data, rdrs_vars, rdrs_dates = load_rdrs_forcings(as_grid=True)
-    landcover_nc = nc.Dataset('../data/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90_erie.nc', 'r')
+    landcover_nc = nc.Dataset(module_dir + '/../data/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90_erie.nc', 'r')
     landcover_fullres = np.array(landcover_nc['Band1'][:])[::-1,:]
 
     if values_to_use is None:
@@ -438,15 +439,15 @@ def load_landcover(values_to_use=None, min_lat=None, max_lat=None, min_lon=None,
         A np.ndarray of shape (#landtypes, #rows, #cols), where the first dimension is the averaged amount of this landtype in cell (row, col), 
         A list of the names of the returned landtypes
     """
-    filename = '../data/geophysical/landcover/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90_30sec.nc'
+    filename = module_dir + '/../data/geophysical/landcover/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90_30sec.nc'
     
     if not os.path.isfile(filename):
         import gdal
-        landcover_nc = nc.Dataset('../data/geophysical/landcover/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90.nc', 'r')
+        landcover_nc = nc.Dataset(module_dir + '/../data/geophysical/landcover/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90.nc', 'r')
         landcover = landcover_nc['Band1'][:].filled(np.nan)
         dem_lats, dem_lons = load_dem_lats_lons()
         
-        landcover_30sec_nc = nc.Dataset('../data/geophysical/landcover/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90_30sec.nc', 'w')
+        landcover_30sec_nc = nc.Dataset(module_dir + '/../data/geophysical/landcover/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90_30sec.nc', 'w')
         landcover_30sec_nc.setncattr('Conventions', 'CF-1.6')
         landcover_30sec_nc.createDimension('lat')
         landcover_30sec_nc.createDimension('lon')
@@ -465,7 +466,7 @@ def load_landcover(values_to_use=None, min_lat=None, max_lat=None, min_lon=None,
         # gdal.Warp can only resample one band at a time. Hence, resample each landtype separately and successively merge into _30sec.nc.
         for i, landtype in landcover_legend.items():
             print(landtype)
-            landcover_temp_nc = nc.Dataset('../data/geophysical/landcover/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90_temp.nc', 'w')
+            landcover_temp_nc = nc.Dataset(module_dir + '/../data/geophysical/landcover/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90_temp.nc', 'w')
             landcover_temp_nc.createDimension('lat')
             landcover_temp_nc.createDimension('lon')
             landcover_temp_nc.createVariable('crs', 'S1')
@@ -487,19 +488,19 @@ def load_landcover(values_to_use=None, min_lat=None, max_lat=None, min_lon=None,
             landcover_temp_nc[varname][:] = (landcover == i).astype(np.float)
             landcover_temp_nc.close()
 
-            gdal_temp = gdal.Open('../data/geophysical/landcover/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90_temp.nc')
+            gdal_temp = gdal.Open(module_dir + '/../data/geophysical/landcover/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90_temp.nc')
             warp_options = gdal.WarpOptions(format='netCDF', xRes=0.008333333333333333333, yRes=0.008333333333333333333, resampleAlg='average')
             print('Warping...')
-            gdal.Warp('../data/geophysical/landcover/landtype_temp.nc'.format(varname), gdal_temp, options=warp_options)
+            gdal.Warp(module_dir + '/../data/geophysical/landcover/landtype_temp.nc'.format(varname), gdal_temp, options=warp_options)
             print('Warping complete.')
-            landtype_temp = nc.Dataset('../data/geophysical/landcover/landtype_temp.nc', 'r')
+            landtype_temp = nc.Dataset(module_dir + '/../data/geophysical/landcover/landtype_temp.nc', 'r')
             landcover_30sec_nc.createVariable(varname, 'f', dimensions=('lat', 'lon'))
             landcover_30sec_nc[varname][:] = landtype_temp['Band1'][:]
             landcover_30sec_nc[varname].setncattr('landtype', landtype)
 
             landtype_temp.close()
-            os.remove('../data/geophysical/landcover/landtype_temp.nc')
-            os.remove('../data/geophysical/landcover/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90_temp.nc')
+            os.remove(module_dir + '/../data/geophysical/landcover/landtype_temp.nc')
+            os.remove(module_dir + '/../data/geophysical/landcover/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90_temp.nc')
         
         landcover_nc.close()
         landcover_30sec_nc.close()
@@ -507,7 +508,7 @@ def load_landcover(values_to_use=None, min_lat=None, max_lat=None, min_lon=None,
     if values_to_use is None:
         values_to_use = list(landcover_legend.keys())
     
-    landcover_nc = nc.Dataset('../data/geophysical/landcover/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90_30sec.nc', 'r')
+    landcover_nc = nc.Dataset(module_dir + '/../data/geophysical/landcover/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90_30sec.nc', 'r')
     landcover = np.zeros((0, landcover_nc['lat'].shape[0], landcover_nc['lon'].shape[0]))
     legend = []
     for i in range(len(values_to_use)):
@@ -530,7 +531,7 @@ def load_dem(min_lat=None, max_lat=None, min_lon=None, max_lon=None):
     Returns:
         A np.ndarray of shape (#rows, #cols) with the DEM information.
     """
-    dem_nc = nc.Dataset('../data/geophysical/dem/hydrosheds_n40-45w75-90_30sec.nc', 'r')
+    dem_nc = nc.Dataset(module_dir + '/../data/geophysical/dem/hydrosheds_n40-45w75-90_30sec.nc', 'r')
     dem = dem_nc['Band1'][:][::-1,:].filled(np.nan)
 
     min_lat_idx, max_lat_idx, min_lon_idx, max_lon_idx = get_bounding_box_indices(min_lat, max_lat, min_lon, max_lon)
@@ -544,7 +545,7 @@ def load_groundwater(min_lat=None, max_lat=None, min_lon=None, max_lon=None):
     Returns:
         A np.ndarray of shape (#rows, #cols) with the groundwater table depth.
     """
-    groundwater_nc = nc.Dataset('../data/geophysical/groundwater/N_America_model_wtd_v2_n40-45w75-90.nc', 'r')
+    groundwater_nc = nc.Dataset(module_dir + '/../data/geophysical/groundwater/N_America_model_wtd_v2_n40-45w75-90.nc', 'r')
     groundwater = groundwater_nc['Band1'][:][::-1,:].filled(np.nan)
     
     min_lat_idx, max_lat_idx, min_lon_idx, max_lon_idx = get_bounding_box_indices(min_lat, max_lat, min_lon, max_lon)
@@ -561,7 +562,7 @@ def load_soil(min_lat=None, max_lat=None, min_lon=None, max_lon=None):
         A np.ndarray of shape (2 * 8, #rows, #cols), where the first 4 entries are sand and the last 4 entries are clay information.
     """
     soiltypes = ['SAND', 'CLAY']
-    soil_nc = nc.Dataset('../data/geophysical/soil/SAND1_n40-45w75-90.nc', 'r')
+    soil_nc = nc.Dataset(module_dir + '/../data/geophysical/soil/SAND1_n40-45w75-90.nc', 'r')
     soil = np.zeros((len(soiltypes) * 8, soil_nc['lat'].shape[0], soil_nc['lon'].shape[0]))
     soil_nc.close()
 
@@ -569,7 +570,7 @@ def load_soil(min_lat=None, max_lat=None, min_lon=None, max_lon=None):
     soil_legend = []
     for i in range(len(soiltypes)):
         for j in [1,2]:
-            soil_nc = nc.Dataset('../data/geophysical/soil/{}{}_n40-45w75-90.nc'.format(soiltypes[i], j), 'r')
+            soil_nc = nc.Dataset(module_dir + '/../data/geophysical/soil/{}{}_n40-45w75-90.nc'.format(soiltypes[i], j), 'r')
             for layer in range(1,5):
                 soil[i*8 + ((j-1)*4 + layer-1)] = soil_nc['Band{}'.format(layer)][:][::-1,:]\
                         .astype(np.float).filled(np.nan) / 100.0
@@ -589,7 +590,7 @@ def load_dem_lats_lons():
         A 1-dimensional np.ndarray of latitudes,
         A 1-dimensional np.ndarray of longitudes
     """
-    dem_nc = nc.Dataset('../data/geophysical/dem/hydrosheds_n40-45w75-90_30sec.nc', 'r')
+    dem_nc = nc.Dataset(module_dir + '/../data/geophysical/dem/hydrosheds_n40-45w75-90_30sec.nc', 'r')
     dem_nc.set_auto_mask(False)
     lats = dem_nc['lat'][:][::-1]
     lons = dem_nc['lon'][:]
