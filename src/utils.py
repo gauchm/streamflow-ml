@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import torch
+import random
 
 
 def add_border(data, style, fill_value=np.nan):
@@ -54,3 +55,33 @@ def resample_by_map(lowres_data, resample_map_rows, resample_map_cols, fill_valu
     Resamples last two dimensions of lowres_data based on resample_map, adding the 1-pixel border to lowres_data to avoid artifacts.
     """
     return add_border(lowres_data, 'fill_value', fill_value=fill_value)[..., resample_map_rows, resample_map_cols]
+
+
+def random_transform(rdrs_batch, geophysical_batch, y_batch, y_mean, train_mask, val_mask, rdrs_contains_month=False, border_masking=0, p=0.5):
+    if random.random() < p:
+        angle = random.randint(-180, 180)
+        horizontal_flip = random.choice([True, False])
+        vertical_flip = random.choice([True, False])
+        transformed_tensors = []
+        for tensor in [rdrs_batch, geophysical_batch, y_batch, y_mean, train_mask.float(), val_mask.float()]:
+            images = [TF.to_pil_image(image, mode='F') for image in tensor.reshape((-1,*tensor.shape[-2:]))]
+            images = [TF.rotate(image, angle) for image in images]
+            images = [TF.hflip(image) for image in images] if horizontal_flip else images
+            images = [TF.vflip(image) for image in images] if vertical_flip else images
+            
+            transformed_tensors.append(torch.cat([TF.to_tensor(image) for image in images]).reshape(tensor.shape))
+        
+        rdrs_transformed, geophysical_transformed, y_transformed, \
+            y_mean_transformed, train_mask_transformed, val_mask_transformed = transformed_tensors
+        
+        # Fix "month" features that are all-0/all-1 images
+        if rdrs_contains_month:
+            rdrs_transformed[:,:,-12:] = rdrs_batch[:,:,-12:]
+            
+        # Do not consider subbasins that are rotated almost out of the image for training
+        border_mask = torch.zeros(train_mask.shape, dtype=torch.bool)
+        border_mask[border_masking:-border_masking,border_masking:-border_masking] = True
+        return rdrs_transformed, geophysical_transformed, y_transformed, y_mean_transformed, \
+                train_mask_transformed.bool() & border_mask, val_mask_transformed.bool() & border_mask
+    
+    return rdrs_batch, geophysical_batch, y_batch, y_mean, train_mask, val_mask

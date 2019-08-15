@@ -240,6 +240,7 @@ class RdrsGridDataset(Dataset):
                 for i in range(len(self.dates)):
                     if self.dates[i] in subbasin_streamflow.index:
                         self.y_sim[i, row, col] = subbasin_streamflow.loc[self.dates[i], 'simulated_streamflow']
+            self.y_sim_means = self.y_sim.mean(dim=0)  # Used for NSE calculation
             
         self.x_conv = torch.from_numpy(self.x_conv).float()
         # Create a tensor of shape (#days, height, width) of target values (only those cells where we have stations get populated)
@@ -253,6 +254,7 @@ class RdrsGridDataset(Dataset):
                 if self.dates[i] in station_runoff.index:
                     self.mask[i, row, col] = True
                     self.y[i, row, col] = station_runoff.loc[self.dates[i], 'runoff']
+        self.y_mean = self.y.mean(dim=0)  # Used for NSE calculation
                     
     def __getitem__(self, index):
         if self.include_simulated_streamflow:
