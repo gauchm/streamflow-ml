@@ -1,11 +1,7 @@
 pickle/
 slurm-*.out
-data/geophysical/soil
-data/geophysical/dem
-data/geophysical/landcover
-data/geophysical/groundwater
+data/
 .ipynb_checkpoints/
 RDRS_CaPA24hr_forcings_final.nc
 __pycache__/
 runs/
-data/train_test
