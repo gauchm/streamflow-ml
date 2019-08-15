@@ -8,10 +8,18 @@ from torch import nn
 
 
 def evaluate_hourly(station_name, prediction, actual, plot=False):
-    """
-    Calculate NSE for hourly predictions by aggregating to daily predictions and then comparing to actual streamflow.
-    Returns (NSE when clipped before aggregation, NSE when clipped after aggregation).
-    Plot is always for clipping after aggregation.
+    """Calculates NSE for hourly predictions by aggregating to daily predictions and then comparing to actual streamflow.
+    
+    This method will clip predictions to be >= 0.
+    
+    Args:
+        station_name (str): Name of the evaluated station.
+        prediction: Series of predictions
+        actual: Series of target values
+        plot (bool): If True, will plot the clipped predicted and actual values.
+    Returns:
+        NSE when clipped before aggregation,
+        NSE when clipped after aggregation
     """
     actual_daily = actual.resample('D').sum()
     
@@ -22,8 +30,18 @@ def evaluate_hourly(station_name, prediction, actual, plot=False):
     
 
 def evaluate_daily(station_name, prediction, actual, plot=False, writer=None, clip=True):
-    """
-    Calculate NSE for daily streamflow prediction. If `writer` is not None, will write plot to tensorboard.
+    """Calculates NSE for daily streamflow predictions. 
+    
+    Args:
+        station_name (str): Name of the evaluated station or subbasin.
+        prediction: Series of predictions
+        actual: Series of target values
+        plot (bool): If True, will plot the predicted and actual values.
+        writer: If not None, will write the plot to tensorboard.
+        clip (bool): Whether to clip predictions to be >= 0.
+    Returns:
+        NSE of predictions,
+        MSE of predictions
     """
     predict_clipped = prediction.copy()
     if clip:
@@ -51,10 +69,21 @@ def evaluate_daily(station_name, prediction, actual, plot=False, writer=None, cl
 
 
 class NSELoss(nn.Module):
+    """NSE loss function."""
     def __init__(self):
+        """See base class."""
         super(NSELoss, self).__init__()
         
     def forward(self, prediction, target, means=None):
+        """Calculates NSE loss of prediction.
+        
+        Args:
+            prediction: tensor of predictions of shape (#batch, #subbasins)
+            target: tensor of target values
+            means: If specified, will use these mean target values in the normalization factor. Can be used to supply per-subbasin mean values. Else, will use mean batch target value.
+        Returns:
+            Mean NSE of the prediction.
+        """
         if means is None:
             means = target.mean(dim=0)
         nses = torch.sum(torch.pow(prediction - target, 2), dim=0) / torch.sum(torch.pow(target - means, 2), dim=0)

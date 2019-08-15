@@ -7,12 +7,36 @@ from torch.utils.data import Dataset, IterableDataset
 from src import load_data, utils
 
 class RdrsDataset(Dataset):
+    """RDRS dataset where target is a list of streamflow values per gauging station.
+    
+    Attributes:
+        date_start, date_end: First and last date in the dataset
+        dates: list of dates in the dataset
+        seq_len, seq_steps: Length and step-size (in hours) of RDRS input variable history for each sample
+        conv_scalers, fc_scalers: sklearn.preprocessing-scalers used to scale time-series and non-time-series input data.
+        n_conv_vars, n_fc_vars: Number of time-series and non-time-series input features.
+        conv_height, conv_width: Number of rows and columns of the time-series variables
+        data_runoff: pd.DataFrame of target streamflow values per date and station
+        x_conv, x_fc: Torch tensors of time-series and non-time-series input data
+        y: Torch tensor of target streamflow values
+    """
     def __init__(self, rdrs_vars, seq_len, seq_steps, date_start, date_end, conv_scalers=None, fc_scalers=None, include_months=True):
+        """Initializes RdrsDataset.
+        
+        Args:
+            rdrs_vars (list(int)): List of RDRS variables to use.
+            seq_len: Length of history of RDRS values to include in the samples.
+            seq_steps: Step-size of the history, in hours.
+            date_start: First date for which the dataset will provide target streamflow values.
+            date_end: Last date for which the dataset will provide target streamflow values.
+            conv_scalers: If provided, will use this list of sklearn.preprocessing scalers to scale the time-series input data.
+            fc_scalers: If provided, will use this list of sklearn.preprocessing scalers to scale the non-time-series input data.
+            include_months (bool): If True, the time-series input data will contain one-hot-encoded months as features.
+        """
         self.date_start = date_start
         self.date_end = date_end
         self.seq_len = seq_len
         self.seq_steps = seq_steps
-        self.samples_per_date = []
         self.conv_scalers = conv_scalers
         self.fc_scalers = fc_scalers
         
@@ -70,6 +94,13 @@ class RdrsDataset(Dataset):
         self.y = torch.from_numpy(data_runoff['runoff'].to_numpy()).float()
         
     def __getitem__(self, index):
+        """Fetches a sample of input/target values.
+        
+        Args:
+            index (int): Index of the sample.
+        Returns:
+            A dict containing: 'x_conv' -> tensor of shape (#timesteps, #n_conv_vars, #rows, #cols), 'x_fc' -> tensor of shape (n_fc_vars), 'y' -> Tensor of target streamflow values.
+        """
         date_of_index = self.data_runoff.iloc[index]['date']
         x_conv_index = np.argmax(self.dates == date_of_index)
         
@@ -78,11 +109,23 @@ class RdrsDataset(Dataset):
                 'y': self.y[index]}
     
     def __len__(self):
+        """Returns the number of samples in the dataset."""
         return self.y.shape[0]
     
     
 class StatefulBatchSampler(torch.utils.data.Sampler):
+    """Sampler for stateful LSTMs.
+    
+    This sampler divides the dataset into batch_size chunks, and in iteration i it returns item i from each chunk.
+    This makes sure that the LSTM gets consecutive input samples.
+    """
     def __init__(self, data_source, batch_size):
+        """Initializes the sampler.
+        
+        Args:
+            data_source: Dataset for which to fetch values.
+            batch_size: Batch size of the LSTM.
+        """
         self.batch_size = batch_size
         self.num_batches = len(data_source) // batch_size
         
@@ -90,6 +133,11 @@ class StatefulBatchSampler(torch.utils.data.Sampler):
             print('Warning: Data source length not divisible by batch_size')
         
     def __iter__(self):
+        """Yields a batch of input indices.
+        
+        Yields:
+            A list of indices into data_source.
+        """
         batch = []
         for i in range(self.num_batches):
             for j in range(self.batch_size):
@@ -98,21 +146,52 @@ class StatefulBatchSampler(torch.utils.data.Sampler):
             batch = []
         
     def __len__(self):
+        """Returns the number of batches in the data_source."""
         return self.num_batches
 
     
 class RdrsGridDataset(Dataset):
-    """ 
-    RDRS dataset where target is a spatial grid of streamflow values.
-    If include_simulated_streamflow, the returned items will be dicts y -> actual gauge stations, y_sim -> simulated gauges.
-    Else, the dict will only contain y.
+    """RDRS dataset where target is a spatial grid of streamflow values.
     
-    If out_lats and out_lons are not specified, will use RDRS grid as output resolution.
-    Specifying out_lats/lons allows for different resolution of geophysical (non-time-series) inputs.
-    
-    If resample_rdrs, will resample RDRS from rotated lat/lon to lat/lon values.
+    Attributes:
+        date_start, date_end: First and last date in the dataset
+        dates: list of dates in the dataset
+        seq_len, seq_steps: Length and step-size (in hours) of RDRS input variable history for each sample
+        conv_scalers: sklearn.preprocessing-scalers used to scale time-series and non-time-series input data.
+        include_simulated_streamflow: Determines whether the dataset contains simulated streamflow for virtual gauges of all subbasins.
+        n_conv_vars: Number of time-series input features.
+        conv_height, conv_width: Number of rows and columns of the time-series variables
+        data_runoff: pd.DataFrame of target streamflow values per date and station, excluding values for exclude_stations (if those are specified)
+        data_runoff_all_stations: pd.DataFrame of target streamflow values per date and station, including values for exclude_stations (if those are specified)
+        simulated_streamflow: If include_simulated_streamflow, this stores the simulated streamflow for each date and subbasin.
+        in_lats, in_lons: 2-d Latitude and longitude arrays of the RDRS data, in rotated lat/lon CRS.
+        rdrs_target_lats, rdrs_target_lons: If resample_rdrs, these 2d-arrays will store the resampled RDRS lats/lons. Else, identical to in_lats/in_lons.
+        out_lats/out_lons: 2-d arrays of lat/lon values of the output values.
+        station_to_index: dict mapping each station to its (row, col) in the output grid.
+        outlet_to_row_col: dict mapping each subbasin to its (row, col) in the output grid.
+        x_conv: Torch tensors of time-series and non-time-series input data
+        y: Torch tensor of target streamflow values
+        y_means, y_sim_means: tensor of shape (#rows, #cols) containing the mean (simulated) target values for this station/subbasin.
+        mask: bool tensor of shape (#dates, #rows, #cols), True iff we have an actual streamflow value for this cell at this date
+        mask_sim: bool tensor of shape (#dates, #rows, #cols), True iff this cell is outlet of its subbasin.
     """
     def __init__(self, rdrs_vars, seq_len, seq_steps, date_start, date_end, conv_scalers=None, exclude_stations=[], aggregate_daily=None, include_months=False, include_simulated_streamflow=False, resample_rdrs=False, out_lats=None, out_lons=None):
+        """Initializes the dataset.
+        
+        Args:
+            rdrs_vars (list(int)): List of RDRS variables to use.
+            seq_len: Length of history of RDRS values to include in the samples.
+            seq_steps: Step-size of the history, in hours.
+            date_start: First date for which the dataset will provide target streamflow values.
+            date_end: Last date for which the dataset will provide target streamflow values.
+            conv_scalers: If provided, will use this list of sklearn.preprocessing scalers to scale the time-series input data.
+            exclude_stations (list or None): If provided, will exclude these stations from the dataset.
+            aggregate_daily (list or None): If provided, will aggregate each RDRS time-series variable to daily values as specified. Allowed values are 'minmax', 'sum'
+            include_months (bool): If True, the time-series input data will contain one-hot-encoded months as features.
+            include_simulated_streamflow (bool): If True, the returned item dicts will contain both 'y' -> actual gauge stations, 'y_sim' -> simulated gauges. Else, the dict will not contain 'y_sim'.
+            resample_rdrs: If True, will resample RDRS from rotated lat/lon to lat/lon values.
+            out_lats, out_lons: If not specified, will use RDRS grid as output resolution. Else, the target value resolution will be in these coordinates.
+        """
         self.date_start = date_start
         self.date_end = date_end
         self.seq_len = seq_len
@@ -254,22 +333,49 @@ class RdrsGridDataset(Dataset):
                 if self.dates[i] in station_runoff.index:
                     self.mask[i, row, col] = True
                     self.y[i, row, col] = station_runoff.loc[self.dates[i], 'runoff']
-        self.y_mean = self.y.mean(dim=0)  # Used for NSE calculation
+        self.y_means = self.y.mean(dim=0)  # Used for NSE calculation
                     
     def __getitem__(self, index):
+        """Fetches a sample of input/target values.
+        
+        Args:
+            index (int): Index of the sample.
+        Returns:
+            A dict containing: 'x_conv' -> tensor of shape (#timesteps, #n_conv_vars, #rows, #cols), 'y' -> Tensor of target streamflow values at gauging stations,
+                               'mask' -> bool tensor of shape (#rows, #cols), True iff this cell is a station that has a target value for sample no. index,
+                               'y_sim' -> tensor of target simulated streamflow values at subbasin outlets.
+        """
         if self.include_simulated_streamflow:
             return {'x_conv': self.x_conv[index,:,:,:,:], 'y': self.y[index], 'mask': self.mask[index], 'y_sim': self.y_sim[index]}
         else:
             return {'x_conv': self.x_conv[index,:,:,:,:], 'y': self.y[index], 'mask': self.mask[index]}
     
     def __len__(self):
+        """Returns the number of samples in the dataset."""
         return self.y.shape[0]
 
     
 class GeophysicalGridDataset(IterableDataset):
-    """ Dataset of geophysical gridded inputs. """
+    """Dataset of geophysical gridded inputs. 
+    
+    Attributes:
+        item: tensor of shape (#geophysical_vars, #rows, #cols)
+        dem: tensor of DEM data
+        landcover, landcover_legend: tensor of landcover data, according legend
+        soil, soil_legend: tensor of soil data, according legend
+        groundwater: tensor of groundwater data
+        scalers: list of scalers used to scale the geophysical variables
+        lats, lons: 2d-arrays of latitudes/longitudes of the grid cells
+        shape: shape of the dataset.
+    """
     def __init__(self, dem=True, landcover=True, soil=True, groundwater=True, min_lat=None, max_lat=None, min_lon=None, max_lon=None, landcover_types=None):
+        """Initializes the dataset.
         
+        Args:
+            dem, landcover, soil, groundwater (bool): Indicate if the corresponding variable(s) are included in the dataset.
+            min_lat, max_lat, min_lon, max_lon: Restrict returned dataset to the bounding box of these coordinates.
+            landcover_types: list of landcover types to include if landcover is True. If None, will include all landtypes.
+        """
         min_lat_idx, max_lat_idx, min_lon_idx, max_lon_idx = load_data.get_bounding_box_indices(min_lat, max_lat, min_lon, max_lon)
         self.item = np.zeros((0,min_lat_idx - max_lat_idx,max_lon_idx - min_lon_idx))
         
@@ -299,5 +405,6 @@ class GeophysicalGridDataset(IterableDataset):
         self.shape = self.item.shape
         
     def __iter__(self):
+        """Yields the geophysical dataset."""
         while True:
             yield self.item

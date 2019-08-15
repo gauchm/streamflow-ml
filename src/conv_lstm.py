@@ -1,5 +1,3 @@
-# Source: https://github.com/ndrplz/ConvLSTM_pytorch
-
 import torch.nn as nn
 from torch.autograd import Variable
 import torch
@@ -7,25 +5,28 @@ from src import utils
 
 
 class ConvLSTMCell(nn.Module):
-
+    """Convolutional LSTM Cell.
+    
+    Adapted from: https://github.com/ndrplz/ConvLSTM_pytorch
+    
+    Attributes:
+        height, width: height and width of input
+        input_dim: Number of input channels
+        hidden_dim: Number of channels in the hidden state
+        kernel_size: Size of the convolutional kernel
+        bias (bool): Whether to include a bias
+        conv: 2d-Convolution
+    """
     def __init__(self, input_size, input_dim, hidden_dim, kernel_size, bias):
-        """
-        Initialize ConvLSTM cell.
+        """Initializes the ConvLSTM cell.
         
-        Parameters
-        ----------
-        input_size: (int, int)
-            Height and width of input tensor as (height, width).
-        input_dim: int
-            Number of channels of input tensor.
-        hidden_dim: int
-            Number of channels of hidden state.
-        kernel_size: (int, int)
-            Size of the convolutional kernel.
-        bias: bool
-            Whether or not to add the bias.
+        Args:
+            input_size (int, int): Height and width of input tensor as (height, width).
+            input_dim (int): Number of channels of input tensor.
+            hidden_dim (int): Number of channels of hidden state.
+            kernel_size (int, int): Size of the convolutional kernel.
+            bias (bool): Whether to add the bias.
         """
-
         super(ConvLSTMCell, self).__init__()
 
         self.height, self.width = input_size
@@ -43,7 +44,14 @@ class ConvLSTMCell(nn.Module):
                               bias=self.bias)
 
     def forward(self, input_tensor, cur_state):
+        """Performs a forward pass on the cell.
         
+        Args:
+            input_tensor: Cell input of shape (batch_size, input_dim, height, width)
+            cur_state: Recurrent cell states of shapes (batch_size, hidden_dim, height, width)
+        Returns:
+            Tuple of new cell states.
+        """
         h_cur, c_cur = cur_state
         
         combined = torch.cat([input_tensor, h_cur], dim=1)  # concatenate along channel axis
@@ -61,14 +69,43 @@ class ConvLSTMCell(nn.Module):
         return h_next, c_next
 
     def init_hidden(self, batch_size, device):
+        """Creates initial hidden states."""
         return (torch.zeros(batch_size, self.hidden_dim, self.height, self.width, device=device, requires_grad=True),
                 torch.zeros(batch_size, self.hidden_dim, self.height, self.width, device=device, requires_grad=True))
 
 
 class ConvLSTM(nn.Module):
-
+    """Convolutional LSTM
+    
+    Adapted from: https://github.com/ndrplz/ConvLSTM_pytorch
+    
+    Attributes:
+        height, width: height and width of input
+        input_dim: Number of input channels
+        hidden_dim: Number of channels in each hidden state
+        kernel_size: Size of each convolutional kernel
+        bias (bool): Whether to include a bias
+        num_layers (int): Number of layers.
+        batch_first (bool): Determines if batch is first or second dimension.
+        return_all_layers: Whether all layer outputs will be returned, or just the last layer's.
+        pooling: Whether to perform max-pooling after each layer
+        cell_list: List of modules, containing the ConLSTMCells and potentially MaxPool2d modules.
+    """
     def __init__(self, input_size, input_dim, hidden_dim, kernel_size, num_layers, pooling=False,
                  batch_first=False, bias=True, return_all_layers=False):
+        """Initializes the ConvLSTM.
+        
+        Args:
+            input_size (int, int): Height and width of input tensor as (height, width).
+            input_dim (int): Number of channels of input tensor.
+            hidden_dim (int or list(int)): Number of channels of hidden states.
+            kernel_size ((int, int) or list((int, int))): Size of the convolutional kernels.
+            num_layers (int): Number of ConvLSTM layers.
+            pooling (bool or list(bool)): Whether to perform max-pooling after each layer.
+            batch_first (bool): If True, expects input as (batch, timesteps, channels, height, width). Else, dim 0 and 1 are swapped.
+            bias (bool): Whether to add the bias.
+            return_all_layers (bool): Whether to return the output of all layers or just the last.
+        """
         super(ConvLSTM, self).__init__()
 
         self._check_kernel_size_consistency(kernel_size)
@@ -111,19 +148,14 @@ class ConvLSTM(nn.Module):
         self.cell_list = nn.ModuleList(cell_list)
 
     def forward(self, input_tensor, hidden_state=None):
-        """
+        """Performs a forward pass on the input.
         
-        Parameters
-        ----------
-        input_tensor: todo 
-            5-D Tensor either of shape (t, b, c, h, w) or (b, t, c, h, w)
-        hidden_state: list or None
-            If list of (h,c)-tuples, will use as LSTM states for the LSTM layers. 
-            If None, will initialize states on each batch.
-            
-        Returns
-        -------
-        last_state_list, layer_output
+        Args:
+            input_tensor: 5d-Tensor either of shape (t, b, c, h, w) or (b, t, c, h, w), depending on self.batch_first
+            hidden_state (list or None): If list of (h,c)-tuples, will use as LSTM states for the LSTM layers. If None, will initialize states on each batch.
+        Returns:
+            last_state_list: List of last state for all layers
+            layer_output: list of last output for all layers (if return_all_layers) or list of length 1 with the output of the last layer (if not return_all_layers).
         """
         if not self.batch_first:
             # (t, b, c, h, w) -> (b, t, c, h, w)
@@ -178,8 +210,33 @@ class ConvLSTM(nn.Module):
 
     
 class ConvLSTMRegression(nn.Module):
+    """ConvLSTM for regression, with fully-connected layers at the end.
+    
+    Allows to add non-time-series inputs, feeding them into the fc-layers together with the ConvLSTM output.
+    
+    Attributes:
+        conv_lstm: Convolutional LSTM
+        dropout: Dropout layer to be applied on the ConvLSTM output
+        pooling: Whether to apply Max-Pooling in the ConvLSTM.
+        fully_connected: The fc-layers.
+    """
     def __init__(self, conv_input_size, fc_input_size, conv_input_dim, conv_hidden_dim, kernel_size, 
                  num_conv_layers, dropout, num_fc_layers, fc_hidden_dim, pooling, batch_first=False, fc_activation=nn.Sigmoid):
+        """Initializes the network.
+        
+        Args:
+            conv_input_size (int, int): Height and width of the timeseries input tensor as (height, width).
+            fc_input_size (int): Dimension of additional inputs to the fully-connected layers.
+            conv_input_dim (int): Number of channels of the timeseries input tensor.
+            conv_hidden_dim (int or list(int)): Number of channels of the ConvLSTM hidden states.
+            kernel_size ((int, int) or list((int, int))): Size of the ConLSTM convolutional kernels.
+            num_conv_layers (int): Number of ConvLSTM layers.
+            num_fc_layers (int): Number of fully-connected layers after the ConvLSTM.
+            fc_hidden_dim (int): Size of the hidden fc layers
+            pooling (list(bool)): Whether to perform max-pooling after each layer.
+            batch_first (bool): If True, expects ConvLSTM input as (batch, timesteps, channels, height, width). Else, dim 0 and 1 are swapped. fc_input always has batch in dim 0.
+            fc_activation: Activation function to use in the fully-connected layers.
+        """
         super(ConvLSTMRegression, self).__init__()
         self.conv_lstm = ConvLSTM(conv_input_size, conv_input_dim, conv_hidden_dim, kernel_size, 
                                   num_conv_layers, pooling=pooling, batch_first=batch_first)
@@ -205,6 +262,16 @@ class ConvLSTMRegression(nn.Module):
         self.fully_connected = nn.Sequential(*fc_layers)
 
     def forward(self, conv_input, fc_input, conv_hidden_states=None):
+        """Performs a forward pass on the input.
+        
+        Args:
+            conv_input: time-series input to the ConvLSTM
+            fc_input: Additional non-time-series input to the fc-layers
+            conv_hidden_states: If provided, will use these hidden states in the ConvLSTM. Else, will initialize on each batch.
+        Returns:
+            Prediction of the fully-connected layer (tensor of shape (batch_size)),
+            New hidden ConvLSTM states
+        """
         batch_size = fc_input.shape[0]
         lstm_out, hidden = self.conv_lstm(conv_input, hidden_state=conv_hidden_states)
         fc_in_conv = self.dropout(lstm_out[-1][:,-1,:,:,:]).reshape((batch_size, -1))
@@ -214,8 +281,32 @@ class ConvLSTMRegression(nn.Module):
     
     
 class ConvLSTMLSTMRegression(nn.Module):
+    """ConvLSTM for regression, with LSTM layers (non-convolutional) and a linear layer at the end.
+    
+    Attributes:
+        conv_lstm: Convolutional LSTM
+        lstm: The LSTM layers
+        linear: Final linear layer, generating the predictions.
+        dropout: Dropout layer to be applied on the ConvLSTM output
+        pooling: Whether to apply Max-Pooling in the ConvLSTM.
+        num_lstm_layers, lstm_hidden_dim: Number and size of LSTM layers
+    """
     def __init__(self, conv_input_size, lstm_input_size, conv_input_dim, conv_hidden_dim, kernel_size, 
                  num_conv_layers, dropout, num_lstm_layers, lstm_hidden_dim, pooling):
+        """Initializes the network.
+        
+        Args:
+            conv_input_size (int, int): Height and width of the timeseries input tensor as (height, width).
+            lstm_input_size (int): Dimension of additional inputs to the fully-connected layers.
+            conv_input_dim (int): Number of channels of the timeseries input tensor.
+            conv_hidden_dim (int or list(int)): Number of channels of the ConvLSTM hidden states.
+            kernel_size ((int, int) or list((int, int))): Size of the ConLSTM convolutional kernels.
+            num_conv_layers (int): Number of ConvLSTM layers.
+            dropout: Probability of dropout after the ConvLSTM.
+            num_lstm_layers (int): Number of LSTM layers after the ConvLSTM.
+            lstm_hidden_dim (int): Size of the hidden LSTM layers
+            pooling (list(bool)): Whether to perform max-pooling after each layer.
+        """
         super(ConvLSTMLSTMRegression, self).__init__()
         self.conv_lstm = ConvLSTM(conv_input_size, conv_input_dim, conv_hidden_dim, kernel_size, 
                                   num_conv_layers, pooling=pooling, batch_first=True)
@@ -236,6 +327,18 @@ class ConvLSTMLSTMRegression(nn.Module):
         self.linear = nn.Linear(lstm_hidden_dim, 1)
 
     def forward(self, conv_input, lstm_input, conv_hidden_states=None, lstm_hidden_states=None):
+        """Performs a forward pass on the input.
+        
+        Args:
+            conv_input: time-series input to the ConvLSTM
+            lstm_input: Additional input to the LSTM layers
+            conv_hidden_states: If provided, will use these hidden states in the ConvLSTM. Else, will initialize on each batch.
+            lstm_hidden_states: If provided, will use these hidden states in the LSTM. Else, will initialize on each batch.
+        Returns:
+            Prediction of the linear layer (tensor of shape (batch_size)),
+            New hidden ConvLSTM states,
+            New hidden LSTM states.
+        """
         batch_size = lstm_input.shape[0]
         conv_out, conv_hidden = self.conv_lstm(conv_input, hidden_state=conv_hidden_states)
         
@@ -252,7 +355,36 @@ class ConvLSTMLSTMRegression(nn.Module):
     
     
 class ConvLSTMGridWithGeophysicalInput(nn.Module):
+    """ConvLSTM for regression, with convolutional (non-LSTM) layers at the end.
+    
+    Allows to add non-time-series spatial inputs, feeding them into the conv-layers together with the ConvLSTM output.
+    
+    Attributes:
+        feed_timesteps (int): Number of ConvLSTM output steps to feed into the conv-layers. The last feed_timesteps layers will be fed into the first conv-layer as individual channels.
+        conv_lstm: Convolutional LSTM
+        dropout: Dropout layer to be applied after each Conv-layer.
+        upsample: TransposedConvolution2d layer to upsample the ConvLSTM output to the geophysical data dimension. 
+                  This way, the ConvLSTM can operate on the coarse RDRS grid, and the Conv-layers can operate on the fine geophysical grid.
+        conv_out: List of convolutional (non-LSTM) layers, together with activation, BatchNorm2d and Dropout layers
+    """
     def __init__(self, input_size, input_dim, geophysical_dim, convlstm_hidden_dim, conv_hidden_dim, convlstm_kernel_size, conv_kernel_size, num_convlstm_layers, num_conv_layers, conv_activation, dropout=0.0, geophysical_size=None, feed_timesteps=1):
+        """Initializes the network.
+        
+        Args:
+            input_size (int, int): Height and width of the timeseries input tensor as (height, width).
+            input_dim (int): Number of channels of the timeseries input tensor.
+            geophysical_dim (int): Number of channels of the non-timeseries input tensor.
+            convlstm_hidden_dim (list(int)): Number of channels of the ConvLSTM hidden states.
+            conv_hidden_dim (list(int)): Number of channels of the convolutional hidden states.
+            convlstm_kernel_size (list((int, int))): Size of the ConLSTM convolutional kernels.
+            conv_kernel_size (list((int, int))): Size of the convolutional kernels.
+            num_convlstm_layers (int): Number of ConvLSTM layers.
+            num_conv_layers (int): Number of convolutional layers.
+            conv_activation: Activation function to use in the convolutional layers.
+            dropout: Probability of dropout after each convolutional layer.
+            geophysical_size (int, int): height and width of the non-timeseries input.
+            feed_timesteps (int): Number of ConvLSTM output steps to feed into the conv-layers. The last feed_timesteps layers will be fed into the first conv-layer as individual channels.
+        """
         super(ConvLSTMGridWithGeophysicalInput, self).__init__()
         self.feed_timesteps = feed_timesteps
         self.conv_lstm = ConvLSTM((input_size[0], input_size[1]), input_dim, convlstm_hidden_dim, convlstm_kernel_size, num_convlstm_layers, batch_first=True)
@@ -284,6 +416,16 @@ class ConvLSTMGridWithGeophysicalInput(nn.Module):
             self.conv_out = nn.Sequential(*conv_layers)
         
     def forward(self, input_tensor, geophysics_tensor, hidden_state=None):
+        """Performs a forward pass on the input.
+        
+        Args:
+            input_tensor: time-series input to the ConvLSTM
+            geophyiscs_tensor: Additional non-timeseries input to the convolutional layers
+            hidden_state: If provided, will use these hidden states in the ConvLSTM. Else, will initialize on each batch.
+        Returns:
+            Prediction of the last convolutional layer (tensor of shape (batch_size, height, width)),
+            New hidden ConvLSTM states.
+        """
         convlstm_out, hidden = self.conv_lstm(input_tensor, hidden_state=hidden_state)
         # last feed_timesteps outputs of last layer
         convlstm_out = convlstm_out[-1][:,-self.feed_timesteps:,:,:,:].reshape((convlstm_out[-1].shape[0],-1,*convlstm_out[-1].shape[3:]))

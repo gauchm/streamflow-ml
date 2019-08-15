@@ -11,6 +11,16 @@ from src import load_data
 
 
 def visualize_kernels(conv_layer, input_channel_names, num_out_channels, figsize=(16,12)):
+    """Visualizes kernels of a convolutional or ConvLSTM layer.
+    
+    Creates plots of the kernels of the passed layer.
+    
+    Args:
+        conv_layer: Layer to visualize.
+        input_channel_names (list(str)): Names of each channel. If conv_layer is an input layer, use this to annotate the plot with the variable names.
+        num_out_channels (int): Only the first num_out_channels will be visualized. Use this for ConvLSTMs to ignore hidden states in visualization.
+        figsize: matplotlib figure size.
+    """
     conv_input_weights = conv_layer.weight[:num_out_channels,:len(input_channel_names)].detach()
     vmin, vmax = conv_input_weights.min(), conv_input_weights.max()
     f, ax = plt.subplots(conv_input_weights.shape[0], conv_input_weights.shape[1], sharex=True, sharey=True, figsize=figsize)
@@ -23,6 +33,16 @@ def visualize_kernels(conv_layer, input_channel_names, num_out_channels, figsize
     
     
 def visualize_hidden_channels(hidden_layers, sample_no, is_convlstm=False, figsize=(20,7)):
+    """Visualizes hidden channels of a convolutional or ConvLSTM layer.
+    
+    Creates plots of the hidden channels of the passed layer for a certain sample.
+    
+    Args:
+        hidden_layers: Layers to visualize.
+        sample_no (int): Number of the sample in the batch to visualize.
+        is_convlstm (bool): Whether the hidden_layers are from a ConvLSTM
+        figsize: matplotlib figure size.
+    """
     # Visualize conv_lstm hidden layer channels
     channel_dim = 2 if is_convlstm else 1
     max_channels = max(h.shape[channel_dim] for h in hidden_layers)
@@ -41,7 +61,7 @@ def visualize_hidden_channels(hidden_layers, sample_no, is_convlstm=False, figsi
     
     
 def get_mask_from_rdrs():
-    """ Returns boolean mask showing where RDRS is nan """
+    """Returns boolean mask showing in which cells RDRS is nan."""
     
     rdrs_data, _, _ = load_data.load_rdrs_forcings(as_grid=True)
     return np.isnan(rdrs_data[0,0])
