@@ -1,3 +1,4 @@
+import numpy as np
 import torch.nn as nn
 from torch.autograd import Variable
 import torch
@@ -365,9 +366,9 @@ class ConvLSTMGridWithGeophysicalInput(nn.Module):
         dropout: Dropout layer to be applied after each Conv-layer.
         upsample: TransposedConvolution2d layer to upsample the ConvLSTM output to the geophysical data dimension. 
                   This way, the ConvLSTM can operate on the coarse RDRS grid, and the Conv-layers can operate on the fine geophysical grid.
-        conv_out: List of convolutional (non-LSTM) layers, together with activation, BatchNorm2d and Dropout layers
+        conv_out: List of convolutional (non-LSTM) layers, together with activation, BatchNorm2d and Dropout layers. If conv_model is passed, this will store the conv_model
     """
-    def __init__(self, input_size, input_dim, geophysical_dim, convlstm_hidden_dim, conv_hidden_dim, convlstm_kernel_size, conv_kernel_size, num_convlstm_layers, num_conv_layers, conv_activation, dropout=0.0, geophysical_size=None, feed_timesteps=1):
+    def __init__(self, input_size, input_dim, geophysical_dim, convlstm_hidden_dim, conv_hidden_dim, convlstm_kernel_size, conv_kernel_size, num_convlstm_layers, num_conv_layers, conv_activation, dropout=0.0, geophysical_size=None, feed_timesteps=1, conv_model=None):
         """Initializes the network.
         
         Args:
@@ -384,6 +385,7 @@ class ConvLSTMGridWithGeophysicalInput(nn.Module):
             dropout: Probability of dropout after each convolutional layer.
             geophysical_size (int, int): height and width of the non-timeseries input.
             feed_timesteps (int): Number of ConvLSTM output steps to feed into the conv-layers. The last feed_timesteps layers will be fed into the first conv-layer as individual channels.
+            conv_model (nn.Module or str or None): If passed, this will replace the convolutional network part. Allowed options: None, 'unet', or a fitting nn.Module.
         """
         super(ConvLSTMGridWithGeophysicalInput, self).__init__()
         self.feed_timesteps = feed_timesteps
@@ -395,26 +397,47 @@ class ConvLSTMGridWithGeophysicalInput(nn.Module):
             upsample_kernel = (geophysical_size[0] + stride[0] * (1 - input_size[0]), geophysical_size[1] + stride[1] * (1 - input_size[1]))
             self.upsample = nn.ConvTranspose2d(convlstm_hidden_dim[-1] * feed_timesteps, convlstm_hidden_dim[-1] * feed_timesteps, 
                                                upsample_kernel, stride=stride)
-        if num_conv_layers == 1:
-            pad = conv_kernel_size[0][0] // 2, conv_kernel_size[0][1] // 2
-            self.conv_out = nn.Conv2d(convlstm_hidden_dim[-1] * feed_timesteps + geophysical_dim, 1, conv_kernel_size[0], padding=pad)
+        if conv_model is None:
+            if num_conv_layers == 1:
+                pad = conv_kernel_size[0][0] // 2, conv_kernel_size[0][1] // 2
+                self.conv_out = nn.Conv2d(convlstm_hidden_dim[-1] * feed_timesteps + geophysical_dim, 1, conv_kernel_size[0], padding=pad)
+            else:
+                pad = conv_kernel_size[0][0] // 2, conv_kernel_size[0][1] // 2
+                conv_layers = [nn.BatchNorm2d(convlstm_hidden_dim[-1] * feed_timesteps + geophysical_dim), 
+                               nn.Conv2d(convlstm_hidden_dim[-1] * feed_timesteps + geophysical_dim, conv_hidden_dim[0], 
+                                         conv_kernel_size[0], padding=pad),
+                               nn.Dropout(p=dropout), conv_activation()]
+                for i in range(1, num_conv_layers - 1):
+                    pad = conv_kernel_size[i][0] // 2, conv_kernel_size[i][1] // 2
+                    conv_layers.append(nn.BatchNorm2d(conv_hidden_dim[i-1]))
+                    conv_layers.append(nn.Conv2d(conv_hidden_dim[i-1], conv_hidden_dim[i], conv_kernel_size[i], padding=pad))
+                    conv_layers.append(conv_activation())
+                    conv_layers.append(nn.Dropout2d(p=dropout))
+                pad = conv_kernel_size[-1][0] // 2, conv_kernel_size[-1][1] // 2
+                conv_layers.append(nn.BatchNorm2d(conv_hidden_dim[-1]))
+                conv_layers.append(nn.Conv2d(conv_hidden_dim[-1], 1, conv_kernel_size[-1], padding=pad))
+                self.conv_out = nn.Sequential(*conv_layers)
+        elif conv_model == 'unet':
+            pad = [0, 0, 0, 0]
+            kernel = [1, 1]
+            if geophysical_size[0] // 16 != 0:
+                pad[2] = int(np.ceil(geophysical_size[0] / 16)) * 16 - geophysical_size[0]
+                kernel[0] = pad[2] + 1  # Choose kernel size to undo padding
+                if pad[2] % 2 == 0:
+                    pad[2] = pad[2] // 2
+                    pad[3] = pad[2]
+            if geophysical_size[1] // 16 != 0:
+                pad[0] = int(np.ceil(geophysical_size[1] / 16)) * 16 - geophysical_size[1]
+                kernel[1] = pad[0] + 1
+                if pad[0] % 2 == 0:
+                    pad[0] = pad[0] // 2
+                    pad[1] = pad[0]
+            unet = torch.hub.load('mateuszbuda/brain-segmentation-pytorch', 'unet', in_channels=convlstm_hidden_dim[-1] * feed_timesteps + geophysical_dim, 
+                                  out_channels=1, init_features=32, pretrained=False)
+            self.conv_out = nn.Sequential(nn.ZeroPad2d(pad), unet, nn.Conv2d(1, 1, kernel), nn.ReLU())  # Add a ReLU because UNet output is [0,1]-bounded sigmoid
         else:
-            pad = conv_kernel_size[0][0] // 2, conv_kernel_size[0][1] // 2
-            conv_layers = [nn.BatchNorm2d(convlstm_hidden_dim[-1] * feed_timesteps + geophysical_dim), 
-                           nn.Conv2d(convlstm_hidden_dim[-1] * feed_timesteps + geophysical_dim, conv_hidden_dim[0], 
-                                     conv_kernel_size[0], padding=pad),
-                           nn.Dropout(p=dropout), conv_activation()]
-            for i in range(1, num_conv_layers - 1):
-                pad = conv_kernel_size[i][0] // 2, conv_kernel_size[i][1] // 2
-                conv_layers.append(nn.BatchNorm2d(conv_hidden_dim[i-1]))
-                conv_layers.append(nn.Conv2d(conv_hidden_dim[i-1], conv_hidden_dim[i], conv_kernel_size[i], padding=pad))
-                conv_layers.append(conv_activation())
-                conv_layers.append(nn.Dropout2d(p=dropout))
-            pad = conv_kernel_size[-1][0] // 2, conv_kernel_size[-1][1] // 2
-            conv_layers.append(nn.BatchNorm2d(conv_hidden_dim[-1]))
-            conv_layers.append(nn.Conv2d(conv_hidden_dim[-1], 1, conv_kernel_size[-1], padding=pad))
-            self.conv_out = nn.Sequential(*conv_layers)
-        
+            self.conv_out = conv_model
+            
     def forward(self, input_tensor, geophysics_tensor, hidden_state=None):
         """Performs a forward pass on the input.
         

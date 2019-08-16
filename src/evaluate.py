@@ -29,7 +29,7 @@ def evaluate_hourly(station_name, prediction, actual, plot=False):
             evaluate_daily(station_name, predict_daily, actual_daily, plot=plot))
     
 
-def evaluate_daily(station_name, prediction, actual, plot=False, writer=None, clip=True):
+def evaluate_daily(station_name, prediction, actual, plot=False, writer=None, clip=True, group=None):
     """Calculates NSE for daily streamflow predictions. 
     
     Args:
@@ -39,6 +39,7 @@ def evaluate_daily(station_name, prediction, actual, plot=False, writer=None, cl
         plot (bool): If True, will plot the predicted and actual values.
         writer: If not None, will write the plot to tensorboard.
         clip (bool): Whether to clip predictions to be >= 0.
+        group (str or None): Whether the station/subbasin is in the train/test/validation set
     Returns:
         NSE of predictions,
         MSE of predictions
@@ -49,10 +50,13 @@ def evaluate_daily(station_name, prediction, actual, plot=False, writer=None, cl
     nse_clip = hydroeval.evaluator(hydroeval.nse, predict_clipped.to_numpy(), actual.to_numpy())[0]
     mse_clip = metrics.mean_squared_error(actual.to_numpy(), predict_clipped.to_numpy())
     
+    title = station_name + ': NSE ' + str(nse_clip) + ', MSE: '+ str(mse_clip)
+    if group is not None:
+        title + ' (' + group + ')'
     if writer is not None:
         writer.add_scalar('NSE_' + station_name, nse_clip, 0)
         f = plt.figure(figsize=(17,4))
-        plt.title(station_name + ': NSE ' + str(nse_clip) + ', MSE: '+ str(mse_clip))
+        plt.title(title)
         plt.plot(actual, label='Target')
         plt.plot(predict_clipped, label='Prediction')
         plt.grid()
@@ -60,7 +64,7 @@ def evaluate_daily(station_name, prediction, actual, plot=False, writer=None, cl
         writer.add_figure(station_name, f, 0, True)
     elif plot:
         f = plt.figure(figsize=(17,4))
-        plt.title(station_name + ': NSE ' + str(nse_clip) + ', MSE: '+ str(mse_clip))
+        plt.title(title)
         plt.plot(actual, label='Target')
         plt.plot(predict_clipped, label='Prediction')
         plt.grid()
