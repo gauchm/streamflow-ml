@@ -52,7 +52,7 @@ def evaluate_daily(station_name, prediction, actual, plot=False, writer=None, cl
     
     title = station_name + ': NSE ' + str(nse_clip) + ', MSE: '+ str(mse_clip)
     if group is not None:
-        title + ' (' + group + ')'
+        title += ' (' + group + ')'
     if writer is not None:
         writer.add_scalar('NSE_' + station_name, nse_clip, 0)
         f = plt.figure(figsize=(17,4))
