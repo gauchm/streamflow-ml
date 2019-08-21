@@ -1,3 +1,4 @@
+import networkx as nx
 import numpy as np
 import pandas as pd
 import torch
@@ -118,3 +119,29 @@ def random_transform(rdrs_batch, geophysical_batch, y_batch, y_means, train_mask
                 train_mask_transformed.bool() & border_mask, val_mask_transformed.bool() & border_mask
     
     return rdrs_batch, geophysical_batch, y_batch, y_means, train_mask, val_mask
+
+
+def create_subbasin_graph():
+    """Creates a directed graph of subbasin downstream relationships.
+    
+    Returns:
+        An nx.DiGraph of subbasins
+    """
+    subbasin_to_downstream = pd.read_csv('../data/simulations_shervan/test.rvh', sep='\s+', skiprows=7, nrows=724, names=['subbasin', 'downstream_subbasin'], usecols=[1,2])
+    subbasin_to_downstream['subbasin'] = subbasin_to_downstream['subbasin']
+    subbasin_to_downstream['downstream_subbasin'] = 'sub' + subbasin_to_downstream['downstream_subbasin'].astype(str)
+    subbasin_to_downstream['edge'] = 1
+
+    for subbasin in subbasin_to_downstream['subbasin'].unique():
+        is_sink = 1 if len(subbasin_to_downstream[(subbasin_to_downstream['subbasin'] == subbasin) & subbasin_to_downstream['edge'] == 1]) == 0 else 0
+        subbasin_to_downstream = subbasin_to_downstream.append({'subbasin': subbasin, 'downstream_subbasin': subbasin, 'edge': is_sink}, ignore_index=True)
+    subbasin_to_downstream = subbasin_to_downstream.append({'subbasin': 'sub-1', 'downstream_subbasin': 'sub-1', 'edge': 1}, ignore_index=True)
+    
+    adj = subbasin_to_downstream.pivot(index='subbasin', columns='downstream_subbasin', values='edge').fillna(0)    
+    adj = adj.sort_index(axis=0).sort_index(axis=1)
+    
+    G = nx.from_numpy_matrix(adj.values, parallel_edges=False, create_using=nx.DiGraph())
+    label_mapping = dict(zip(range(len(adj.values)), adj.index))
+    G = nx.relabel_nodes(G, label_mapping)
+    
+    return G

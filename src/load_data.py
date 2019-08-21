@@ -4,6 +4,7 @@ import os
 import netCDF4 as nc
 from datetime import datetime, timedelta
 import pickle
+import dill
 import torch
 
 module_dir = os.path.dirname(os.path.abspath(__file__))
@@ -189,11 +190,14 @@ def pickle_model(name, model, station, time_stamp, model_type='torch'):
         model: The model to save, e.g. an sklearn, XGBoost or torch model.
         station (str): A string describing which station the model is trained for.
         time_stamp: Time stamp of model run, used for unique identification.
-        model_type (str): If 'torch', will use torch.save to pickle the model. If 'xgb' or other, will use pickle.dump.
+        model_type (str): If 'torch', will use torch.save to pickle the model. If 'torch.dill', will use torch.save(...,pickle_module=dill). 
+                          If 'xgb' or other, will use pickle.dump.
     """
     file_name = module_dir + '/../pickle/models/{}_{}_{}.pkl'.format(name, station, time_stamp)
     if model_type == 'torch':
         torch.save(model, file_name)
+    elif model_type == 'torch.dill':
+        torch.save(model, file_name, pickle_module=dill)
     elif model_type == 'xgb':
         pickle.dump(model, open(file_name, 'wb'))
     else:
@@ -201,7 +205,7 @@ def pickle_model(name, model, station, time_stamp, model_type='torch'):
     print('Saved model as', file_name)
     
     
-def save_model_with_state(name, epoch, model, optimizer, time_stamp):
+def save_model_with_state(name, epoch, model, optimizer, time_stamp, use_dill=False):
     """Pickles a PyTorch model including state.
     
     Writes the passed model, epoch and optimizer to pickle/models/, including their states.
@@ -212,6 +216,7 @@ def save_model_with_state(name, epoch, model, optimizer, time_stamp):
         model: PyTorch model to save.
         optimizer: Optimizer used in training.
         time_stamp: Time stamp of model run, used for unique identification.
+        use_dill: If True, will use dill instead of pickle to pickle the model. Needed if a model contains lambdas, which pickle can't pickle.
     """
     state = {
         'epoch': epoch,
@@ -220,10 +225,13 @@ def save_model_with_state(name, epoch, model, optimizer, time_stamp):
     }
     torch.save(state, module_dir + '/../pickle/models/{}_{}_state.pkl'.format(name, time_stamp))
     pickle.dump(optimizer, open(module_dir + '/../pickle/models/{}_{}_optimizer.pkl'.format(name, time_stamp), 'wb'))
-    pickle_model(name, model, 'allStations', time_stamp, model_type='torch')
+    if use_dill:
+        pickle_model(name, model, 'allStations', time_stamp, model_type='torch.dill')
+    else:
+        pickle_model(name, model, 'allStations', time_stamp, model_type='torch')
     
     
-def load_model_and_state(name, time_stamp):
+def load_model_and_state(name, time_stamp, use_dill=False):
     """Load a model and state from disk.
     
     Loads a model, optimizer and epoch as saved by save_model_with_state.
@@ -231,10 +239,15 @@ def load_model_and_state(name, time_stamp):
     Args:
         name (str): Name of the model.
         time_stamp: Time stamp of model run, used for unique identification.
+        use_dill (bool, default False): If True, will load the model using dill instead of pickle.
     Returns:
         A tuple (model, optimizer, epoch).
     """
-    model = torch.load(module_dir + '/../pickle/models/{}_allStations_{}.pkl'.format(name, time_stamp))
+    model_path = module_dir + '/../pickle/models/{}_allStations_{}.pkl'.format(name, time_stamp)
+    if use_dill:
+        model = torch.load(model_path, pickle_module=dill)
+    else:
+        model = torch.load(model_path)
     model.load_state_dict(state['state_dict'])
     optimizer = pickle.load(open(module_dir + '/../pickle/models/{}_{}_optimizer.pkl'.format(name, time_stamp), 'rb'))
     optimizer.load_state_dict(state['optimizer'])
