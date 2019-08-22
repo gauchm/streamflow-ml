@@ -465,15 +465,18 @@ class SubbasinAggregatedDataset(Dataset):
         out_lons = out_lons[(erie_lon_min <= out_lons) &  (out_lons <= erie_lon_max)].copy()
 
         # load gridded RDRS, only temp and precp
-        self.grid_dataset = RdrsGridDataset(rdrs_vars, seq_len, seq_steps, date_start, date_end, conv_scalers=conv_scalers, aggregate_daily=aggregate_daily, 
-                                            include_months=include_months, include_simulated_streamflow=True, resample_rdrs=True, out_lats=out_lats, out_lons=out_lons)
+        self.grid_dataset = RdrsGridDataset(rdrs_vars, seq_len, seq_steps, date_start, date_end, conv_scalers=conv_scalers, 
+                                            aggregate_daily=aggregate_daily, include_months=include_months, include_simulated_streamflow=True, 
+                                            resample_rdrs=True, out_lats=out_lats, out_lons=out_lons)
         
         # load geophysical data
-        self.geophysical_dataset = GeophysicalGridDataset(dem=dem, landcover=landcover, soil=soil, groundwater=groundwater, min_lat=erie_lat_min, max_lat=erie_lat_max, min_lon=erie_lon_min,
-                                                              max_lon=erie_lon_max, landcover_types=landcover_types)
+        self.geophysical_dataset = GeophysicalGridDataset(dem=dem, landcover=landcover, soil=soil, groundwater=groundwater, 
+                                                          min_lat=erie_lat_min, max_lat=erie_lat_max, min_lon=erie_lon_min,
+                                                          max_lon=erie_lon_max, landcover_types=landcover_types)
         geophysical_data = next(self.geophysical_dataset.__iter__())
 
         # load subbasin shapes
+        print('Loading subbasin shapes')
         with open(module_dir + '/../data/simulations_shervan/subbasins.geojson', 'r') as f:
             shape_json = json.loads(f.read())
         subbasin_shapes = {}
@@ -497,6 +500,7 @@ class SubbasinAggregatedDataset(Dataset):
         cell_aggregations = pickle.load(open(module_dir + '/../data/train_test/subbasins_to_grid_cells.pkl', 'rb')) 
 
         # aggregate per-grid-cell into per-subbasin values
+        print('Aggregating into subbasins')
         x_avg = torch.zeros((*self.grid_dataset.x_conv.shape[:2], self.grid_dataset.x_conv.shape[2] + geophysical_data.shape[0], len(self.subbasins)))
         x_min = torch.zeros(x_avg.shape) + np.inf
         x_max = torch.zeros(x_avg.shape) - np.inf
@@ -504,15 +508,16 @@ class SubbasinAggregatedDataset(Dataset):
         row_steps, col_steps = len(out_lats) // self.grid_dataset.x_conv.shape[-2] + 1, len(out_lons) // self.grid_dataset.x_conv.shape[-1] + 1
         for i in range(len(self.subbasins)):
             for row, col in cell_aggregations[self.subbasins[i]]:
-                cell_value = self.grid_dataset.x_conv[...,row//row_steps,col//col_steps]
+                cell_value = self.grid_dataset.x_conv[:,:,:,row//row_steps,col//col_steps]
                 cell_value = torch.cat([cell_value, geophysical_data[:,row,col].reshape(1,1,-1).repeat(x_avg.shape[0], x_avg.shape[1],1)], dim=2)
-                x_avg[...,i] += cell_value
-                x_min[...,i] = torch.min(x_min[...,i], cell_value)
-                x_max[...,i] = torch.max(x_max[...,i], cell_value)
+                x_avg[:,:,:,i] += cell_value
+                x_min[:,:,:,i] = torch.min(x_min[:,:,:,i], cell_value)
+                x_max[:,:,:,i] = torch.max(x_max[:,:,:,i], cell_value)
 
-            x_avg[...,i] = x_avg[...,i] / len(cell_aggregations[self.subbasins[i]])
+            x_avg[:,:,:,i] = x_avg[:,:,:,i] / len(cell_aggregations[self.subbasins[i]])
             row, col = self.grid_dataset.outlet_to_row_col[self.subbasins[i]]
-            self.y_sim[:,i] = torch.from_numpy(self.grid_dataset.simulated_streamflow[self.grid_dataset.simulated_streamflow['subbasin']==self.subbasins[i]]['simulated_streamflow'].values)
+            self.y_sim[:,i] = torch.from_numpy(self.grid_dataset.simulated_streamflow[self.grid_dataset.simulated_streamflow['subbasin']==\
+                                                                                      self.subbasins[i]]['simulated_streamflow'].values)
         
         self.x = torch.cat([x_avg, x_min, x_max], dim=2).float()
         self.y_sim = self.y_sim.float()

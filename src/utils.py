@@ -145,3 +145,24 @@ def create_subbasin_graph():
     G = nx.relabel_nodes(G, label_mapping)
     
     return G
+
+
+def create_hop_matrix(G, max_hops):
+    """Creates a matrix of hop-connectedness.
+    
+    Args:
+        G: nx.Graph
+        max_hops: Maximum number of hops to consider
+        
+    Returns:
+        torch.Tensor of shape (max_hops, #nodes, #nodes), 
+            where entry (i,v,w) is 1 if shortest-path distance from node v to w is i, else 0.
+    """
+    distances = dict(nx.all_pairs_dijkstra_path_length(G))
+    hop_matrix = torch.zeros(max_hops, G.number_of_nodes(), G.number_of_nodes(), dtype=torch.int)
+    for hop in range(max_hops):
+        for i, node_from in enumerate(G.nodes):
+            for j, node_to in enumerate(G.nodes):
+                if node_to in distances[node_from].keys() and distances[node_from][node_to] == hop:
+                    hop_matrix[hop,i,j] = 1
+    return hop_matrix

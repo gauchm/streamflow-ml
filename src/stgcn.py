@@ -68,6 +68,7 @@ class Model(nn.Module):
 
     Args:
         in_channels (int): Number of channels in the input data
+        spatial_kernel_size (int): Size of the spatial kernel
         **kwargs (optional): Other parameters for graph convolution units
 
     Shape:
@@ -78,11 +79,11 @@ class Model(nn.Module):
             :math:`V_{in}` is the number of graph nodes.
     """
 
-    def __init__(self, in_channels, **kwargs):
+    def __init__(self, in_channels, spatial_kernel_size, **kwargs):
         super().__init__()
 
         # build networks
-        spatial_kernel_size = 1
+        spatial_kernel_size = spatial_kernel_size
         temporal_kernel_size = 9
         kernel_size = (temporal_kernel_size, spatial_kernel_size)
         #self.data_bn = nn.BatchNorm1d(in_channels * A.size(1))  # Not doing this so we remain flexible in the input graph
