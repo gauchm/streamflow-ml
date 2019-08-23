@@ -329,7 +329,7 @@ class RdrsGridDataset(Dataset):
                 row, col = self.outlet_to_row_col[subbasin]
                 self.mask_sim[row, col] = True
                 subbasin_streamflow = self.simulated_streamflow[self.simulated_streamflow['subbasin']==subbasin].set_index('date')
-                if subbasin_streamflow['StationID'].values[0] is not None:
+                if not pd.isna(subbasin_streamflow['StationID'].values[0]):
                     self.subbasin_to_station[subbasin] = subbasin_streamflow['StationID'].values[0]
                 for i in range(len(self.dates)):
                     if self.dates[i] in subbasin_streamflow.index:
@@ -528,11 +528,11 @@ class SubbasinAggregatedDataset(Dataset):
                                                                                       subbasin]['simulated_streamflow'].values)
             if subbasin in self.grid_dataset.subbasin_to_station.keys():
                 station = self.grid_dataset.subbasin_to_station[subbasin]
-                measured_streamflow = self.grid_dataset.data_runoff[self.grid_dataset.data_runoff['station']==station]['runoff']
+                measured_streamflow = self.grid_dataset.data_runoff[self.grid_dataset.data_runoff['station']==station].set_index('date')['runoff']
                 for j in range(self.y.shape[0]):
                     date = self.grid_dataset.dates[j]
                     if date in measured_streamflow.index:
-                        self.y[j,i] = torch.from_numpy(measured_streamflow.loc[date])
+                        self.y[j,i] = measured_streamflow.loc[date]
                         self.y_mask[j,i] = True
                 
         

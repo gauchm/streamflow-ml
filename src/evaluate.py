@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
 import hydroeval
@@ -49,6 +50,9 @@ def evaluate_daily(station_name, prediction, actual, plot=False, writer=None, cl
         predict_clipped = prediction.clip(0)
     nse_clip = hydroeval.evaluator(hydroeval.nse, predict_clipped.to_numpy(), actual.to_numpy())[0]
     mse_clip = metrics.mean_squared_error(actual.to_numpy(), predict_clipped.to_numpy())
+    
+    if np.isneginf(nse_clip):
+        nse_clip = np.nan
     
     title = station_name + ': NSE ' + str(nse_clip) + ', MSE: '+ str(mse_clip)
     if group is not None:
