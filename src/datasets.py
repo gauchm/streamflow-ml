@@ -428,6 +428,8 @@ class GeophysicalGridDataset(IterableDataset):
 class SubbasinAggregatedDataset(Dataset):
     """Dataset of RDRS and Geophyiscal data, aggregated into subbasins.
     
+    To improve loading speed, will pickle the loaded data to a file in data/train_test/ and load it from there the next time.
+    
     Attributes:
         subbasins (list(int)): Subbasins in the dataset
         dates: list of dates in the dataset
@@ -459,101 +461,132 @@ class SubbasinAggregatedDataset(Dataset):
             dem, landcover, soil, groundwater (bool): If True, will use DEM/landcover/soil/groundwater in the geophysical data
             landcover_types (list or None): List of landcover types to use if landcover=True.
         """
-        self.subbasins = subbasins
-        
-        # get coordinates
-        landcover_nc = nc.Dataset('../data/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90_erie.nc', 'r')
-        landcover_nc.set_auto_mask(False)
-        erie_lats = landcover_nc['lat'][:][::-1]
-        erie_lons = landcover_nc['lon'][:]
-        landcover_nc.close()
-        erie_lat_min, erie_lat_max, erie_lon_min, erie_lon_max = erie_lats.min(), erie_lats.max(), erie_lons.min(), erie_lons.max()
-        del erie_lats, erie_lons
-
-        out_lats, out_lons = load_data.load_dem_lats_lons()
-        out_lats = out_lats[(erie_lat_min <= out_lats) & (out_lats <= erie_lat_max)].copy()
-        out_lons = out_lons[(erie_lon_min <= out_lons) &  (out_lons <= erie_lon_max)].copy()
-
-        # load gridded RDRS, only temp and precp
-        grid_dataset = RdrsGridDataset(rdrs_vars, seq_len, seq_steps, date_start, date_end, conv_scalers=conv_scalers, 
-                                       aggregate_daily=aggregate_daily, include_months=include_months, include_simulated_streamflow=True, 
-                                       resample_rdrs=True, out_lats=out_lats, out_lons=out_lons)
-        self.scalers = grid_dataset.conv_scalers
-        self.simulated_streamflow = grid_dataset.simulated_streamflow
-        self.data_streamflow = grid_dataset.data_runoff
-        self.dates = grid_dataset.dates
-        self.subbasin_to_station = grid_dataset.subbasin_to_station
-        
-        # load geophysical data
-        geophysical_dataset = GeophysicalGridDataset(dem=dem, landcover=landcover, soil=soil, groundwater=groundwater, 
-                                                          min_lat=erie_lat_min, max_lat=erie_lat_max, min_lon=erie_lon_min,
-                                                          max_lon=erie_lon_max, landcover_types=landcover_types)
-        geophysical_data = next(geophysical_dataset.__iter__())
-
-        # load subbasin shapes
-        with open(module_dir + '/../data/simulations_shervan/subbasins.geojson', 'r') as f:
-            shape_json = json.loads(f.read())
-        subbasin_shapes = {}
-        for s in shape_json['features']:
-            subbasin_shapes[s['properties']['SubId']] = shape(s['geometry'])
-
-        # get a mapping of each subbasin to its grid cells
-        if not os.path.isfile(module_dir + '/../data/train_test/subbasins_to_grid_cells.pkl'):
-            def aggregate_grid_to_subbasin(grid_lats, grid_lons, subbasin_shape):
-                cell_list = []
-                for row in range(len(grid_lats)):
-                    for col in range(len(grid_lons)):
-                        if subbasin_shape.intersects(shapely.geometry.Point(grid_lons[col],grid_lats[row]).buffer(1/120)):
-                            cell_list.append((row,col))
-                if len(cell_list) == 0:
-                    raise Exception('No cells in subbasin', subbasin_shape)
-                return cell_list
-            cell_aggregations = Parallel(n_jobs=-1,verbose=5)(delayed(aggregate_grid_to_subbasin)(out_lats,out_lons,subbasin_shapes[subbasin]) 
-                                                              for subbasin in subbasin_shapes.keys())
-            cell_aggregations = dict(zip(subbasin_shapes.keys(), cell_aggregations))
-            pickle.dump(cell_aggregations, open(module_dir + '/../data/train_test/subbasins_to_grid_cells.pkl', 'wb'))
-        cell_aggregations = pickle.load(open(module_dir + '/../data/train_test/subbasins_to_grid_cells.pkl', 'rb')) 
-
-        # aggregate per-grid-cell into per-subbasin values
-        x_conv = grid_dataset.x_conv
-        row_steps, col_steps = len(out_lats) // x_conv.shape[-2] + 1, len(out_lons) // x_conv.shape[-1] + 1
-        def aggregate_values_to_subbasin(subbasin):
-            x_sum = torch.zeros((*x_conv.shape[:2], x_conv.shape[2] + geophysical_data.shape[0]))
-            x_min = torch.zeros(x_sum.shape) + np.inf
-            x_max = torch.zeros(x_sum.shape) - np.inf
-            for row, col in cell_aggregations[subbasin]:
-                cell_value = torch.cat([x_conv[:,:,:,row//row_steps,col//col_steps], 
-                                        geophysical_data[:,row,col].reshape(1,1,-1).repeat(x_sum.shape[0], x_sum.shape[1],1)], dim=2)
-                x_sum += cell_value
-                x_min = torch.min(x_min, cell_value)
-                x_max = torch.max(x_max, cell_value)
-
-            row, col = grid_dataset.outlet_to_row_col[subbasin]
-            y_sim = torch.from_numpy(self.simulated_streamflow[self.simulated_streamflow['subbasin'] == subbasin]['simulated_streamflow'].values)
-            y = torch.zeros(x_sum.shape[0])
-            y_mask = torch.zeros(x_sum.shape[0]).bool()
-            if subbasin in self.subbasin_to_station.keys():
-                station = self.subbasin_to_station[subbasin]
-                measured_streamflow = self.data_streamflow[self.data_streamflow['station'] == station].set_index('date')['runoff']
-                for j in range(x_sum.shape[0]):
-                    date = self.dates[j]
-                    if date in measured_streamflow.index:
-                        y[j] = measured_streamflow.loc[date]
-                        y_mask[j] = True
+        # We save the data in the following file. Different configurations can end up in the same file, so we'll store a list of the files.
+        file_path = module_dir + '/../data/train_test/SubbasinAggregatedDataset_{}_{}-{}_{}-{}_{}_{}_{}_{}.pkl'.format('-'.join(str(v) for v in rdrs_vars), seq_len, seq_steps, 
+                                        date_start, date_end, 'dem' if dem else '' + 'landcover' if landcover else '' + 'soil' if soil else '' + 'groundwater' if groundwater else '', 
+                                        '-'.join(str(l) for l in landcover_types) if landcover_types is not None else '', 
+                                        '-'.join(aggregate_daily) if aggregate_daily is not None else '', 'month' if include_months else 'noMonth')
+        found_matching_saved_dataset = False
+        saved_obj_list = []
+        if os.path.isfile(file_path):
+            saved_obj_list = pickle.load(open(file_path, 'rb'))
+            for obj in saved_obj_list:
+                self.subbasins, self.dates, self.scalers, self.simulated_streamflow, self.data_streamflow, \
+                    self.subbasin_to_station, self.x, self.y, self.y_mask, self.y_sim, self.y_means, self.y_sim_means, scalers_passed = obj
+                subbasin_diff = list(s for s in self.subbasins if s not in subbasins) + list(s for s in subbasins if s not in self.subbasins)
+                if (len(subbasin_diff) > 0) or (conv_scalers is None and scalers_passed):
+                    continue
+                if conv_scalers is not None:
+                    if len(conv_scalers) != len(self.scalers):
+                        continue
+                    for s1, s2 in zip(conv_scalers, self.scalers):
+                        p1, p2 = s1.get_params(), s2.get_params()
+                        for k,v in p1.items():
+                            if p2[k] != v:
+                                continue
+                found_matching_saved_dataset = True
+                print('Using saved dataset in file {}'.format(file_path))
+                break
+        if not found_matching_saved_dataset:
+            self.subbasins = subbasins
             
-            return torch.cat([x_sum, x_min, x_max], dim=2), y, y_mask, y_sim
-        agg = Parallel(n_jobs=-1,verbose=1,prefer='threads')(delayed(aggregate_values_to_subbasin)(subbasin) for subbasin in self.subbasins)
+            # get coordinates
+            landcover_nc = nc.Dataset('../data/NA_NALCMS_LC_30m_LAEA_mmu12_urb05_n40-45w75-90_erie.nc', 'r')
+            landcover_nc.set_auto_mask(False)
+            erie_lats = landcover_nc['lat'][:][::-1]
+            erie_lons = landcover_nc['lon'][:]
+            landcover_nc.close()
+            erie_lat_min, erie_lat_max, erie_lon_min, erie_lon_max = erie_lats.min(), erie_lats.max(), erie_lons.min(), erie_lons.max()
+            del erie_lats, erie_lons
+
+            out_lats, out_lons = load_data.load_dem_lats_lons()
+            out_lats = out_lats[(erie_lat_min <= out_lats) & (out_lats <= erie_lat_max)].copy()
+            out_lons = out_lons[(erie_lon_min <= out_lons) &  (out_lons <= erie_lon_max)].copy()
+
+            # load gridded RDRS, only temp and precp
+            grid_dataset = RdrsGridDataset(rdrs_vars, seq_len, seq_steps, date_start, date_end, conv_scalers=conv_scalers, 
+                                           aggregate_daily=aggregate_daily, include_months=include_months, include_simulated_streamflow=True, 
+                                           resample_rdrs=True, out_lats=out_lats, out_lons=out_lons)
+            self.scalers = grid_dataset.conv_scalers
+            self.simulated_streamflow = grid_dataset.simulated_streamflow
+            self.data_streamflow = grid_dataset.data_runoff
+            self.dates = grid_dataset.dates
+            self.subbasin_to_station = grid_dataset.subbasin_to_station
         
-        del grid_dataset, geophysical_data
-        self.x = torch.stack([a[0] for a in agg], dim=3)
-        count_tensor = torch.Tensor(list(len(cell_aggregations[subbasin]) for subbasin in self.subbasins))\
-                                    .reshape(1,1,1,-1).repeat(self.x.shape[0], self.x.shape[1], 1, 1)
-        self.x = torch.cat([self.x, count_tensor], dim=2).float()
-        self.y = torch.stack([a[1] for a in agg], dim=1).float()
-        self.y_mask = torch.stack([a[2] for a in agg], dim=1)
-        self.y_sim = torch.stack([a[3] for a in agg], dim=1).float()
-        self.y_means = self.y.mean(dim=0).float()
-        self.y_sim_means = self.y_sim.mean(dim=0).float()
+            # load geophysical data
+            geophysical_dataset = GeophysicalGridDataset(dem=dem, landcover=landcover, soil=soil, groundwater=groundwater, 
+                                                              min_lat=erie_lat_min, max_lat=erie_lat_max, min_lon=erie_lon_min,
+                                                              max_lon=erie_lon_max, landcover_types=landcover_types)
+            geophysical_data = next(geophysical_dataset.__iter__())
+
+            # load subbasin shapes
+            with open(module_dir + '/../data/simulations_shervan/subbasins.geojson', 'r') as f:
+                shape_json = json.loads(f.read())
+            subbasin_shapes = {}
+            for s in shape_json['features']:
+                subbasin_shapes[s['properties']['SubId']] = shape(s['geometry'])
+
+            # get a mapping of each subbasin to its grid cells
+            if not os.path.isfile(module_dir + '/../data/train_test/subbasins_to_grid_cells.pkl'):
+                def aggregate_grid_to_subbasin(grid_lats, grid_lons, subbasin_shape):
+                    cell_list = []
+                    for row in range(len(grid_lats)):
+                        for col in range(len(grid_lons)):
+                            if subbasin_shape.intersects(shapely.geometry.Point(grid_lons[col],grid_lats[row]).buffer(1/120)):
+                                cell_list.append((row,col))
+                    if len(cell_list) == 0:
+                        raise Exception('No cells in subbasin', subbasin_shape)
+                    return cell_list
+                cell_aggregations = Parallel(n_jobs=-1,verbose=5)(delayed(aggregate_grid_to_subbasin)(out_lats,out_lons,subbasin_shapes[subbasin]) 
+                                                                  for subbasin in subbasin_shapes.keys())
+                cell_aggregations = dict(zip(subbasin_shapes.keys(), cell_aggregations))
+                pickle.dump(cell_aggregations, open(module_dir + '/../data/train_test/subbasins_to_grid_cells.pkl', 'wb'))
+            cell_aggregations = pickle.load(open(module_dir + '/../data/train_test/subbasins_to_grid_cells.pkl', 'rb')) 
+
+            # aggregate per-grid-cell into per-subbasin values
+            x_conv = grid_dataset.x_conv
+            row_steps, col_steps = len(out_lats) // x_conv.shape[-2] + 1, len(out_lons) // x_conv.shape[-1] + 1
+            def aggregate_values_to_subbasin(subbasin):
+                x_sum = torch.zeros((*x_conv.shape[:2], x_conv.shape[2] + geophysical_data.shape[0]))
+                x_min = torch.zeros(x_sum.shape) + np.inf
+                x_max = torch.zeros(x_sum.shape) - np.inf
+                for row, col in cell_aggregations[subbasin]:
+                    cell_value = torch.cat([x_conv[:,:,:,row//row_steps,col//col_steps], 
+                                            geophysical_data[:,row,col].reshape(1,1,-1).repeat(x_sum.shape[0], x_sum.shape[1],1)], dim=2)
+                    x_sum += cell_value
+                    x_min = torch.min(x_min, cell_value)
+                    x_max = torch.max(x_max, cell_value)
+
+                row, col = grid_dataset.outlet_to_row_col[subbasin]
+                y_sim = torch.from_numpy(self.simulated_streamflow[self.simulated_streamflow['subbasin'] == subbasin]['simulated_streamflow'].values)
+                y = torch.zeros(x_sum.shape[0])
+                y_mask = torch.zeros(x_sum.shape[0]).bool()
+                if subbasin in self.subbasin_to_station.keys():
+                    station = self.subbasin_to_station[subbasin]
+                    measured_streamflow = self.data_streamflow[self.data_streamflow['station'] == station].set_index('date')['runoff']
+                    for j in range(x_sum.shape[0]):
+                        date = self.dates[j]
+                        if date in measured_streamflow.index:
+                            y[j] = measured_streamflow.loc[date]
+                            y_mask[j] = True
+
+                return torch.cat([x_sum, x_min, x_max], dim=2), y, y_mask, y_sim
+            agg = Parallel(n_jobs=-1,verbose=1,prefer='threads')(delayed(aggregate_values_to_subbasin)(subbasin) for subbasin in self.subbasins)
+
+            del grid_dataset, geophysical_data
+            self.x = torch.stack([a[0] for a in agg], dim=3)
+            count_tensor = torch.Tensor(list(len(cell_aggregations[subbasin]) for subbasin in self.subbasins))\
+                                        .reshape(1,1,1,-1).repeat(self.x.shape[0], self.x.shape[1], 1, 1)
+            self.x = torch.cat([self.x, count_tensor], dim=2).float()
+            self.y = torch.stack([a[1] for a in agg], dim=1).float()
+            self.y_mask = torch.stack([a[2] for a in agg], dim=1)
+            self.y_sim = torch.stack([a[3] for a in agg], dim=1).float()
+            self.y_means = self.y.mean(dim=0).float()
+            self.y_sim_means = self.y_sim.mean(dim=0).float()
+            
+            saved_obj_list.append((self.subbasins, self.dates, self.scalers, self.simulated_streamflow, self.data_streamflow, self.subbasin_to_station,
+                        self.x, self.y, self.y_mask, self.y_sim, self.y_means, self.y_sim_means, conv_scalers is not None))
+            pickle.dump(saved_obj_list, open(file_path, 'wb'))
         
     def __getitem__(self, index):
         """Fetches a sample of input/target values.
@@ -571,3 +604,4 @@ class SubbasinAggregatedDataset(Dataset):
     def __len__(self):
         """Returns the number of samples in the dataset."""
         return self.y_sim.shape[0]
+    
