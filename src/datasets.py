@@ -173,6 +173,7 @@ class RdrsGridDataset(Dataset):
         data_runoff: pd.DataFrame of target streamflow values per date and station, excluding values for exclude_stations (if those are specified)
         data_runoff_all_stations: pd.DataFrame of target streamflow values per date and station, including values for exclude_stations (if those are specified)
         simulated_streamflow: If include_simulated_streamflow, this stores the simulated streamflow for each date and subbasin.
+        subbasin_to_station: If include_simulated_streamflow, this maps subbasin names to gauging station names.
         in_lats, in_lons: 2-d Latitude and longitude arrays of the RDRS data, in rotated lat/lon CRS.
         rdrs_target_lats, rdrs_target_lons: If resample_rdrs, these 2d-arrays will store the resampled RDRS lats/lons. Else, identical to in_lats/in_lons.
         out_lats/out_lons: 2-d arrays of lat/lon values of the output values.
@@ -323,10 +324,13 @@ class RdrsGridDataset(Dataset):
             self.y_sim = torch.zeros((len(self.dates), self.out_lats.shape[0], self.out_lats.shape[1]))
              # Mask is True iff this cell is a subbasin's outlet
             self.mask_sim = torch.zeros((self.out_lats.shape[0], self.out_lats.shape[1]), dtype=torch.bool)
-            for subbasin in self.simulated_streamflow['subbasin'].unique():
+            self.subbasin_to_station = {}
+            for subbasin in self.simulated_streamflow['subbasin'].unique():                
                 row, col = self.outlet_to_row_col[subbasin]
                 self.mask_sim[row, col] = True
                 subbasin_streamflow = self.simulated_streamflow[self.simulated_streamflow['subbasin']==subbasin].set_index('date')
+                if subbasin_streamflow['StationID'].values[0] is not None:
+                    self.subbasin_to_station[subbasin] = subbasin_streamflow['StationID'].values[0]
                 for i in range(len(self.dates)):
                     if self.dates[i] in subbasin_streamflow.index:
                         self.y_sim[i, row, col] = subbasin_streamflow.loc[self.dates[i], 'simulated_streamflow']
@@ -429,8 +433,11 @@ class SubbasinAggregatedDataset(Dataset):
         grid_dataset (datasets.RdrsGridDataset): Gridded RDRS data this dataset is based on
         geophysical_data (datasets.GeophysicalGridDataset): Gridded geophysical data this dataset is based on
         x (torch.Tensor): Data in this dataset, shape (#samples, #timesteps, #channels, #subbasins)
+        y (torch.Tensor): Measured target streamflow data at gauging stations, shape (#samples, #subbasins). 
+        y_mask (torch.Tensor): bool tensor of shape (#samples, #subbasins), True iff subbasin is a station and has non-NA value for this date.
         y_sim (torch.Tensor): Simulated target streamflow data, shape (#samples, #subbasins)
         y_sim_means (torch.Tensor): Mean simulated target streamflow per subbasin, shape (#subbasins)
+        y_means (torch.Tensor): Mean measured target streamflow per station, shape (#subbasins)
     """
     def __init__(self, rdrs_vars, subbasins, seq_len, seq_steps, date_start, date_end, conv_scalers=None, aggregate_daily=None, include_months=False, 
                  dem=True, landcover=False, soil=False, groundwater=False, landcover_types=[]):
@@ -476,7 +483,6 @@ class SubbasinAggregatedDataset(Dataset):
         geophysical_data = next(self.geophysical_dataset.__iter__())
 
         # load subbasin shapes
-        print('Loading subbasin shapes')
         with open(module_dir + '/../data/simulations_shervan/subbasins.geojson', 'r') as f:
             shape_json = json.loads(f.read())
         subbasin_shapes = {}
@@ -500,28 +506,41 @@ class SubbasinAggregatedDataset(Dataset):
         cell_aggregations = pickle.load(open(module_dir + '/../data/train_test/subbasins_to_grid_cells.pkl', 'rb')) 
 
         # aggregate per-grid-cell into per-subbasin values
-        print('Aggregating into subbasins')
         x_avg = torch.zeros((*self.grid_dataset.x_conv.shape[:2], self.grid_dataset.x_conv.shape[2] + geophysical_data.shape[0], len(self.subbasins)))
         x_min = torch.zeros(x_avg.shape) + np.inf
         x_max = torch.zeros(x_avg.shape) - np.inf
+        self.y = torch.zeros((x_avg.shape[0], len(self.subbasins)))
+        self.y_mask = torch.zeros((x_avg.shape[0], len(self.subbasins))).to(bool)
         self.y_sim = torch.zeros((x_avg.shape[0], len(self.subbasins)))
         row_steps, col_steps = len(out_lats) // self.grid_dataset.x_conv.shape[-2] + 1, len(out_lons) // self.grid_dataset.x_conv.shape[-1] + 1
         for i in range(len(self.subbasins)):
-            for row, col in cell_aggregations[self.subbasins[i]]:
+            subbasin = self.subbasins[i]
+            for row, col in cell_aggregations[subbasin]:
                 cell_value = self.grid_dataset.x_conv[:,:,:,row//row_steps,col//col_steps]
                 cell_value = torch.cat([cell_value, geophysical_data[:,row,col].reshape(1,1,-1).repeat(x_avg.shape[0], x_avg.shape[1],1)], dim=2)
                 x_avg[:,:,:,i] += cell_value
                 x_min[:,:,:,i] = torch.min(x_min[:,:,:,i], cell_value)
                 x_max[:,:,:,i] = torch.max(x_max[:,:,:,i], cell_value)
 
-            x_avg[:,:,:,i] = x_avg[:,:,:,i] / len(cell_aggregations[self.subbasins[i]])
-            row, col = self.grid_dataset.outlet_to_row_col[self.subbasins[i]]
+            x_avg[:,:,:,i] = x_avg[:,:,:,i] / len(cell_aggregations[subbasin])
+            row, col = self.grid_dataset.outlet_to_row_col[subbasin]
             self.y_sim[:,i] = torch.from_numpy(self.grid_dataset.simulated_streamflow[self.grid_dataset.simulated_streamflow['subbasin']==\
-                                                                                      self.subbasins[i]]['simulated_streamflow'].values)
+                                                                                      subbasin]['simulated_streamflow'].values)
+            if subbasin in self.grid_dataset.subbasin_to_station.keys():
+                station = self.grid_dataset.subbasin_to_station[subbasin]
+                measured_streamflow = self.grid_dataset.data_runoff[self.grid_dataset.data_runoff['station']==station]['runoff']
+                for j in range(self.y.shape[0]):
+                    date = self.grid_dataset.dates[j]
+                    if date in measured_streamflow.index:
+                        self.y[j,i] = torch.from_numpy(measured_streamflow.loc[date])
+                        self.y_mask[j,i] = True
+                
         
         self.x = torch.cat([x_avg, x_min, x_max], dim=2).float()
+        self.y = self.y.float()
         self.y_sim = self.y_sim.float()
-        self.y_sim_means = self.y_sim.mean(dim=0).float()        
+        self.y_means = self.y.mean(dim=0).float()        
+        self.y_sim_means = self.y_sim.mean(dim=0).float()
         
     def __getitem__(self, index):
         """Fetches a sample of input/target values.
@@ -530,9 +549,11 @@ class SubbasinAggregatedDataset(Dataset):
             index (int): Index of the sample.
         Returns:
             A dict containing: 'x' -> tensor of shape (#timesteps, #channels, #subbasins),
+                               'y' -> tensor of target measured streamflow values at gauging stations (zero for other subbasins).
+                               'y_mask' -> bool tensor indicating if the subbasin is a station with non-NA measurement for the sample.
                                'y_sim' -> tensor of target simulated streamflow values at subbasin outlets.
         """
-        return {'x': self.x[index,:,:,:], 'y_sim': self.y_sim[index]}
+        return {'x': self.x[index,:,:,:], 'y_sim': self.y_sim[index], 'y': self.y[index], 'y_mask': self.y_mask[index]}
         
     def __len__(self):
         """Returns the number of samples in the dataset."""
