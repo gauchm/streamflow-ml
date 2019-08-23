@@ -69,6 +69,11 @@ class Model(nn.Module):
     Args:
         in_channels (int): Number of channels in the input data
         spatial_kernel_size (int): Size of the spatial kernel
+        edge_importance_weighting (bool, optional): If True, adds a learnable importance weighting to the edges of the graph.
+                                                    Need to specify adjacency is used. 
+                                                    Note that with this option enabled, the network will only work on the specific graph 
+                                                        (or graphs with the same adjacency shape)
+        adjacency_shape (torch.Size, optional): shape of the adjacency list. Required if edge_importance_weighting is True.
         **kwargs (optional): Other parameters for graph convolution units
 
     Shape:
@@ -79,7 +84,7 @@ class Model(nn.Module):
             :math:`V_{in}` is the number of graph nodes.
     """
 
-    def __init__(self, in_channels, spatial_kernel_size, **kwargs):
+    def __init__(self, in_channels, spatial_kernel_size, edge_importance_weighting=False, adjacency_shape=None, **kwargs):
         super().__init__()
 
         # build networks
@@ -100,6 +105,12 @@ class Model(nn.Module):
             st_gcn(256, 256, kernel_size, 1, **kwargs),
             st_gcn(256, 256, kernel_size, 1, **kwargs),
         ))
+        
+        # initialize parameters for edge importance weighting
+        if edge_importance_weighting:
+            self.edge_importance = nn.ParameterList([nn.Parameter(torch.ones(adjacency_shape)) for i in self.st_gcn_networks])
+        else:
+            self.edge_importance = [1] * len(self.st_gcn_networks)
 
         # fcn for prediction
         self.fcn = nn.Conv2d(256, 1, kernel_size=1)
@@ -116,8 +127,8 @@ class Model(nn.Module):
         x = x.view(N, C, T, V)
         
         # forwad
-        for gcn in self.st_gcn_networks:
-            x, _ = gcn(x, A)
+        for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
+            x, _ = gcn(x, A * importance)
         
         # global pooling across time dimension
         x = F.avg_pool2d(x, (x.size()[2], 1))
@@ -141,8 +152,8 @@ class Model(nn.Module):
         x = x.view(N, C, T, V)
 
         # forwad
-        for gcn in self.st_gcn_networks:
-            x, _ = gcn(x, A)
+        for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
+            x, _ = gcn(x, A * importance)
 
         _, c, t, v = x.size()
         feature = x.view(N, c, t, v)

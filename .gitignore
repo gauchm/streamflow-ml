@@ -5,4 +5,5 @@ data/
 RDRS_CaPA24hr_forcings_final.nc
 __pycache__/
 runs/
+runs_coldstore/
 notebooks/experiments.ipynb
