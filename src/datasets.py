@@ -1,4 +1,5 @@
 import os
+import hashlib
 import pickle
 from joblib import Parallel, delayed
 import numpy as np
@@ -462,10 +463,12 @@ class SubbasinAggregatedDataset(Dataset):
             landcover_types (list or None): List of landcover types to use if landcover=True.
         """
         # We save the data in the following file. Different configurations can end up in the same file, so we'll store a list of the files.
-        file_path = module_dir + '/../data/train_test/SubbasinAggregatedDataset_{}_{}-{}_{}-{}_{}_{}_{}_{}.pkl'.format('-'.join(str(v) for v in rdrs_vars), seq_len, seq_steps, 
+        subbasin_hash = hashlib.md5('-'.join(str(s) for s in subbasins).encode()).hexdigest()
+        file_path = module_dir + '/../data/train_test/SubbasinAggregatedDataset_{}_{}-{}_{}-{}_{}_{}_{}_{}_{}.pkl'.format('-'.join(str(v) for v in rdrs_vars), seq_len, seq_steps, 
                                         date_start, date_end, 'dem' if dem else '' + 'landcover' if landcover else '' + 'soil' if soil else '' + 'groundwater' if groundwater else '', 
                                         '-'.join(str(l) for l in landcover_types) if landcover_types is not None else '', 
-                                        '-'.join(aggregate_daily) if aggregate_daily is not None else '', 'month' if include_months else 'noMonth')
+                                        '-'.join(aggregate_daily) if aggregate_daily is not None else '', 'month' if include_months else 'noMonth',
+                                        subbasin_hash)
         file_path = file_path.replace(' ', '').replace(':','')
         found_matching_saved_dataset = False
         saved_obj_list = []
@@ -474,8 +477,7 @@ class SubbasinAggregatedDataset(Dataset):
             for obj in saved_obj_list:
                 self.subbasins, self.dates, self.scalers, self.simulated_streamflow, self.data_streamflow, \
                     self.subbasin_to_station, self.x, self.y, self.y_mask, self.y_sim, self.y_means, self.y_sim_means, scalers_passed = obj
-                subbasin_diff = list(s for s in self.subbasins if s not in subbasins) + list(s for s in subbasins if s not in self.subbasins)
-                if (len(subbasin_diff) > 0) or (conv_scalers is None and scalers_passed):
+                if (self.subbasins != subbasins) or (conv_scalers is None and scalers_passed):
                     continue
                 if conv_scalers is not None:
                     if len(conv_scalers) != len(self.scalers):
@@ -588,6 +590,7 @@ class SubbasinAggregatedDataset(Dataset):
             saved_obj_list.append((self.subbasins, self.dates, self.scalers, self.simulated_streamflow, self.data_streamflow, self.subbasin_to_station,
                         self.x, self.y, self.y_mask, self.y_sim, self.y_means, self.y_sim_means, conv_scalers is not None))
             pickle.dump(saved_obj_list, open(file_path, 'wb'), protocol=4)
+            print('Saved object to {}'.format(file_path))
         
     def __getitem__(self, index):
         """Fetches a sample of input/target values.
