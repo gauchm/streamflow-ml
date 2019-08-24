@@ -69,6 +69,7 @@ class Model(nn.Module):
     Args:
         in_channels (int): Number of channels in the input data
         spatial_kernel_size (int): Size of the spatial kernel
+        temporal_kernel_size (int): Size of the temporal kernel
         edge_importance_weighting (bool, optional): If True, adds a learnable importance weighting to the edges of the graph.
                                                     Need to specify adjacency is used. 
                                                     Note that with this option enabled, the network will only work on the specific graph 
@@ -84,14 +85,17 @@ class Model(nn.Module):
             :math:`V_{in}` is the number of graph nodes.
     """
 
-    def __init__(self, in_channels, spatial_kernel_size, edge_importance_weighting=False, adjacency_shape=None, **kwargs):
+    def __init__(self, in_channels, spatial_kernel_size, temporal_kernel_size, 
+                 edge_importance_weighting=False, adjacency_shape=None, **kwargs):
         super().__init__()
 
         # build networks
-        spatial_kernel_size = spatial_kernel_size
-        temporal_kernel_size = 9
         kernel_size = (temporal_kernel_size, spatial_kernel_size)
-        #self.data_bn = nn.BatchNorm1d(in_channels * A.size(1))  # Not doing this so we remain flexible in the input graph
+        if adjacency_shape is not None:
+            self.data_bn = nn.BatchNorm1d(in_channels * adjacency_shape[1])
+        else:
+            # Not doing this so we remain flexible in the input graph
+            self.data_bn = nn.Identity()
         kwargs0 = {k: v for k, v in kwargs.items() if k != 'dropout'}
         self.st_gcn_networks = nn.ModuleList((
             st_gcn(in_channels, 64, kernel_size, 1, residual=False, **kwargs0),
@@ -120,9 +124,9 @@ class Model(nn.Module):
         # data normalization
         N, C, T, V = x.size()
         x = x.permute(0, 3, 1, 2).contiguous()
-        #x = x.view(N, V * C, T)
-        #x = self.data_bn(x)
-        #x = x.view(N, V, C, T)
+        x = x.view(N, V * C, T)
+        x = self.data_bn(x)
+        x = x.view(N, V, C, T)
         x = x.permute(0, 2, 3, 1).contiguous()
         x = x.view(N, C, T, V)
         

@@ -466,6 +466,7 @@ class SubbasinAggregatedDataset(Dataset):
                                         date_start, date_end, 'dem' if dem else '' + 'landcover' if landcover else '' + 'soil' if soil else '' + 'groundwater' if groundwater else '', 
                                         '-'.join(str(l) for l in landcover_types) if landcover_types is not None else '', 
                                         '-'.join(aggregate_daily) if aggregate_daily is not None else '', 'month' if include_months else 'noMonth')
+        file_path = file_path.replace(' ', '').replace(':','')
         found_matching_saved_dataset = False
         saved_obj_list = []
         if os.path.isfile(file_path):
@@ -586,7 +587,7 @@ class SubbasinAggregatedDataset(Dataset):
             
             saved_obj_list.append((self.subbasins, self.dates, self.scalers, self.simulated_streamflow, self.data_streamflow, self.subbasin_to_station,
                         self.x, self.y, self.y_mask, self.y_sim, self.y_means, self.y_sim_means, conv_scalers is not None))
-            pickle.dump(saved_obj_list, open(file_path, 'wb'))
+            pickle.dump(saved_obj_list, open(file_path, 'wb'), protocol=4)
         
     def __getitem__(self, index):
         """Fetches a sample of input/target values.
