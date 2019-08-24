@@ -224,14 +224,14 @@ def save_model_with_state(name, epoch, model, optimizer, time_stamp, use_dill=Fa
         'optimizer': optimizer.state_dict()
     }
     torch.save(state, module_dir + '/../pickle/models/{}_{}_state.pkl'.format(name, time_stamp))
-    pickle.dump(optimizer, open(module_dir + '/../pickle/models/{}_{}_optimizer.pkl'.format(name, time_stamp), 'wb'))
+    torch.save(optimizer, module_dir + '/../pickle/models/{}_{}_optimizer.pkl'.format(name, time_stamp))
     if use_dill:
         pickle_model(name, model, 'allStations', time_stamp, model_type='torch.dill')
     else:
         pickle_model(name, model, 'allStations', time_stamp, model_type='torch')
     
     
-def load_model_and_state(name, time_stamp, use_dill=False):
+def load_model_and_state(name, time_stamp, device, optimizer=None, use_dill=False):
     """Load a model and state from disk.
     
     Loads a model, optimizer and epoch as saved by save_model_with_state.
@@ -239,20 +239,23 @@ def load_model_and_state(name, time_stamp, use_dill=False):
     Args:
         name (str): Name of the model.
         time_stamp: Time stamp of model run, used for unique identification.
+        device: Device on which to load the model, e.g. a GPU device
+        optimizer: Torch optimizer to initialize with saved state
         use_dill (bool, default False): If True, will load the model using dill instead of pickle.
     Returns:
-        A tuple (model, optimizer, epoch).
+        A tuple (model, optimizer, epoch) or (model, epoch), depending on whether an optimizer was passed.
     """
     model_path = module_dir + '/../pickle/models/{}_allStations_{}.pkl'.format(name, time_stamp)
     if use_dill:
-        model = torch.load(model_path, pickle_module=dill)
+        model = torch.load(model_path, pickle_module=dill, map_location=device)
     else:
-        model = torch.load(model_path)
+        model = torch.load(model_path, map_location=device)
+    state = torch.load(module_dir + '/../pickle/models/{}_{}_state.pkl'.format(name, time_stamp), map_location=device)
     model.load_state_dict(state['state_dict'])
-    optimizer = pickle.load(open(module_dir + '/../pickle/models/{}_{}_optimizer.pkl'.format(name, time_stamp), 'rb'))
-    optimizer.load_state_dict(state['optimizer'])
-    
-    return model, optimizer, epoch
+    if optimizer is not None:
+        optimizer.load_state_dict(state['optimizer'])
+        return model, optimizer, state['epoch']
+    return model, state['epoch']
 
 
 def load_train_test_gridded_dividedStreamflow():
