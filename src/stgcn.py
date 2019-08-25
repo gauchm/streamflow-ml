@@ -94,7 +94,7 @@ class Model(nn.Module):
         if adjacency_shape is not None:
             self.data_bn = nn.BatchNorm1d(in_channels * adjacency_shape[1])
         else:
-            # Not doing this so we remain flexible in the input graph
+            # No BatchNorm so we remain flexible in the input graph
             self.data_bn = nn.Identity()
         kwargs0 = {k: v for k, v in kwargs.items() if k != 'dropout'}
         self.st_gcn_networks = nn.ModuleList((
