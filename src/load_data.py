@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import pickle
 import dill
 import torch
+import json
 
 module_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -648,3 +649,17 @@ def get_bounding_box_indices(min_lat, max_lat, min_lon, max_lon):
     
     return min_lat_idx, max_lat_idx, min_lon_idx, max_lon_idx
     
+    
+def load_subbasin_shapes():
+    """Loads subbasin shapes from GeoJSON.
+    
+    Returns:
+        dict, mapping subbasin_id to its GeoJSON information
+    """
+    with open(module_dir + '/../data/simulations_shervan/subbasins.geojson', 'r') as f:
+        shape_json = json.loads(f.read())
+    subbasin_shapes = {}
+    for s in shape_json['features']:
+        subbasin_shapes[s['properties']['SubId']] = s
+    
+    return subbasin_shapes

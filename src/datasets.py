@@ -523,11 +523,7 @@ class SubbasinAggregatedDataset(Dataset):
             geophysical_data = next(geophysical_dataset.__iter__())
 
             # load subbasin shapes
-            with open(module_dir + '/../data/simulations_shervan/subbasins.geojson', 'r') as f:
-                shape_json = json.loads(f.read())
-            subbasin_shapes = {}
-            for s in shape_json['features']:
-                subbasin_shapes[s['properties']['SubId']] = shape(s['geometry'])
+            subbasin_shapes = load_data.load_subbasin_shapes()
 
             # get a mapping of each subbasin to its grid cells
             if not os.path.isfile(module_dir + '/../data/train_test/subbasins_to_grid_cells.pkl'):
@@ -540,7 +536,7 @@ class SubbasinAggregatedDataset(Dataset):
                     if len(cell_list) == 0:
                         raise Exception('No cells in subbasin', subbasin_shape)
                     return cell_list
-                cell_aggregations = Parallel(n_jobs=-1,verbose=5)(delayed(aggregate_grid_to_subbasin)(out_lats,out_lons,subbasin_shapes[subbasin]) 
+                cell_aggregations = Parallel(n_jobs=-1,verbose=5)(delayed(aggregate_grid_to_subbasin)(out_lats,out_lons,shape(subbasin_shapes[subbasin]['geometry']))
                                                                   for subbasin in subbasin_shapes.keys())
                 cell_aggregations = dict(zip(subbasin_shapes.keys(), cell_aggregations))
                 pickle.dump(cell_aggregations, open(module_dir + '/../data/train_test/subbasins_to_grid_cells.pkl', 'wb'))

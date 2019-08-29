@@ -4,6 +4,32 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 
 
+class HistoricConv2d(nn.Conv2d):
+    """Conv2d Module for temporal convolution that only convolves over past and current time steps.
+    
+    Kernel weights for future time steps (dimension T_{in}, starting with kernel_size[0] // 2 + 1) are masked to 0.
+    For kernel_size[0] == 1, this is equivalent to a normal Conv2d-operation.
+    
+    Input: (N, C_{in}, T_{in}, V_{in})
+    Output: (N, C_{out}, T_{out}, V_{out})
+    """
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, 
+                 padding=0, dilation=1, groups=1, bias=True, padding_mode='zeros'):
+        super().__init__(in_channels, out_channels, kernel_size, stride=stride, padding=padding, 
+                         dilation=dilation, groups=groups, bias=bias, padding_mode=padding_mode)
+        
+        if type(kernel_size) == int:
+            kernel_size = (kernel_size, kernel_size)
+        self.mask = torch.zeros((out_channels, in_channels // groups, kernel_size[0], kernel_size[1]), 
+                                requires_grad=False)
+        self.mask[:,:,:kernel_size[0]//2 + 1, :] = 1
+        
+        
+    def forward(self, x):
+        return F.conv2d(x, self.weight * self.mask, bias=self.bias, stride=self.stride, 
+                        padding=self.padding, dilation=self.dilation, groups=self.groups)
+
+
 class ConvTemporalGraphical(nn.Module):
     """The basic module for applying a graph convolution.
     
@@ -40,7 +66,7 @@ class ConvTemporalGraphical(nn.Module):
         super().__init__()
 
         self.kernel_size = kernel_size
-        self.conv = nn.Conv2d(
+        self.conv = HistoricConv2d(
             in_channels,
             out_channels * kernel_size,
             kernel_size=(t_kernel_size, 1),
@@ -102,10 +128,10 @@ class Model(nn.Module):
             st_gcn(64, 64, kernel_size, 1, **kwargs),
             st_gcn(64, 64, kernel_size, 1, **kwargs),
             st_gcn(64, 64, kernel_size, 1, **kwargs),
-            st_gcn(64, 128, kernel_size, 2, **kwargs),
+            st_gcn(64, 128, kernel_size, 1, **kwargs),
             st_gcn(128, 128, kernel_size, 1, **kwargs),
             st_gcn(128, 128, kernel_size, 1, **kwargs),
-            st_gcn(128, 256, kernel_size, 2, **kwargs),
+            st_gcn(128, 256, kernel_size, 1, **kwargs),
             st_gcn(256, 256, kernel_size, 1, **kwargs),
             st_gcn(256, 256, kernel_size, 1, **kwargs),
         ))
@@ -116,8 +142,8 @@ class Model(nn.Module):
         else:
             self.edge_importance = [1] * len(self.st_gcn_networks)
 
-        # fcn for prediction
-        self.fcn = nn.Conv2d(256, 1, kernel_size=1)
+        # reduce to one channel for prediction
+        self.out_conv = HistoricConv2d(256, 1, kernel_size=1)
 
     def forward(self, x, A):
 
@@ -134,15 +160,9 @@ class Model(nn.Module):
         for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
             x, _ = gcn(x, A * importance)
         
-        # global pooling across time dimension
-        x = F.avg_pool2d(x, (x.size()[2], 1))
-        x = x.view(N, -1, 1, V)
-        
         # prediction
-        x = self.fcn(x)
-        x = x.view(x.size(0), V)
-        
-        return x
+        x = self.out_conv(x)
+        return x[:,0,-1,:]  # return first (and only) channel and last time step
 
     def extract_feature(self, x, A):
 
@@ -163,9 +183,7 @@ class Model(nn.Module):
         feature = x.view(N, c, t, v)
 
         # prediction
-        x = self.fcn(x)
-        output = x.view(N, -1, t, v)
-
+        output = self.out_conv(x)
         return output, feature
 
     
@@ -207,7 +225,7 @@ class st_gcn(nn.Module):
         self.tcn = nn.Sequential(
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
-            nn.Conv2d(
+            HistoricConv2d(
                 out_channels,
                 out_channels,
                 (kernel_size[0], 1),

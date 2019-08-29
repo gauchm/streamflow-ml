@@ -1,9 +1,12 @@
+import os
 import networkx as nx
 import numpy as np
 import pandas as pd
 import torch
 import torchvision.transforms.functional as TF
 import random
+
+module_dir = os.path.dirname(os.path.abspath(__file__))
 
 
 def add_border(data, style, fill_value=np.nan):
@@ -127,7 +130,7 @@ def create_subbasin_graph():
     Returns:
         An nx.DiGraph of subbasins
     """
-    subbasin_to_downstream = pd.read_csv('../data/simulations_shervan/test.rvh', sep='\s+', skiprows=7, nrows=724, names=['subbasin', 'downstream_subbasin'], usecols=[1,2])
+    subbasin_to_downstream = pd.read_csv(module_dir + '/../data/simulations_shervan/test.rvh', sep='\s+', skiprows=7, nrows=724, names=['subbasin', 'downstream_subbasin'], usecols=[1,2])
     subbasin_to_downstream['subbasin'] = subbasin_to_downstream['subbasin']
     subbasin_to_downstream['downstream_subbasin'] = 'sub' + subbasin_to_downstream['downstream_subbasin'].astype(str)
     subbasin_to_downstream['edge'] = 1
@@ -167,3 +170,37 @@ def create_hop_matrix(G, max_hops, node_list):
                 if node_to in distances[node_from].keys() and distances[node_from][node_to] == hop:
                     hop_matrix[hop,i,j] = 1
     return hop_matrix
+
+
+def random_graph_subsample_with_sources(graph, components, comp_subsample_fraction, p_node_subsample):
+    """Randomly selects components from the graph, and reduces each component with probability p_node_subsample.
+    
+    First, selects a subset of comp_subsample_fraction connected components of graph.
+    With probability p_node_subsample, further subsamples each selected component's nodes. If this subsampling 
+    is performed for a component, the node subset is always a sub-component that contains the component's source(s).
+    
+    Arguments:
+        graph: nx.DiGraph, the input graph
+        components: list of pre-computed connected components
+        comp_subsample_fraction: fraction of components to subsample
+        p_node_subsample: Probability of node subsampling in each selected component
+    
+    Returns:
+        list of selected nodes
+    """
+    subsampled_components = np.random.choice(components, size=int(comp_subsample_fraction * len(components)), replace=False)
+    subsampled_component_nodes = []
+    for comp in subsampled_components:
+        if np.random.random() < p_node_subsample:
+            # select a subgraph, rooted in the component's source nodes
+            # start with sources
+            subsampled_nodes = [n for n, in_deg in graph.subgraph(['sub' + str(c) for c in comp]).in_degree if in_deg==0]
+            subsampled_comp_size = np.random.randint(len(comp))
+            while len(subsampled_nodes) < subsampled_comp_size:  # expand neighborhood subsampled_comp_size steps
+                subsampled_nodes += [s for n in subsampled_nodes for s in graph.successors(n)]
+            subsampled_component_nodes += subsampled_nodes
+        else:
+            # use all nodes in the component
+            subsampled_component_nodes = ['sub' + str(n) for comp in subsampled_components for n in comp]
+            
+    return sorted(int(n[3:]) for n in subsampled_component_nodes)
