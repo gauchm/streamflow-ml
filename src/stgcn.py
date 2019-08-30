@@ -123,11 +123,11 @@ class Model(nn.Module):
             # No BatchNorm so we remain flexible in the input graph
             self.data_bn = nn.Identity()
         kwargs0 = {k: v for k, v in kwargs.items() if k != 'dropout'}
-        hidden_channels = 4
+        hidden_channels = 16
         self.st_gcn_networks = nn.ModuleList((
             st_gcn(in_channels, hidden_channels, self.kernel_size, 1, residual=False, **kwargs0),
             st_gcn(hidden_channels, hidden_channels, self.kernel_size, 1, **kwargs),
-            st_gcn(hidden_channels, 1, self.kernel_size, 1, **kwargs),
+            st_gcn(hidden_channels, hidden_channels, self.kernel_size, 1, **kwargs),
         ))
         
         # initialize parameters for edge importance weighting
@@ -137,7 +137,7 @@ class Model(nn.Module):
             self.edge_importance = [1] * len(self.st_gcn_networks)
 
         # reduce to one channel for prediction
-        #self.out_conv = HistoricConv2d(hidden_channels, 1, kernel_size=1)
+        self.out_conv = HistoricConv2d(hidden_channels, 1, kernel_size=1)
 
     def forward(self, x, A, max_path_len):
 
@@ -159,30 +159,8 @@ class Model(nn.Module):
         x, _ = self.st_gcn_networks[2](x, A * self.edge_importance[2])
         
         # prediction
-        #x = self.out_conv(x)
+        x = self.out_conv(x)
         return x[:,0,-1,:]  # return first (and only) channel and last time step
-
-    def extract_feature(self, x, A):
-
-        # data normalization
-        N, C, T, V = x.size()
-        x = x.permute(0, 3, 1, 2).contiguous()
-        x = x.view(N, V * C, T)
-        x = self.data_bn(x)
-        x = x.view(N, V, C, T)
-        x = x.permute(0, 2, 3, 1).contiguous()
-        x = x.view(N, C, T, V)
-
-        # forwad
-        for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
-            x, _ = gcn(x, A * importance)
-
-        _, c, t, v = x.size()
-        feature = x.view(N, c, t, v)
-
-        # prediction
-        output = self.out_conv(x)
-        return output, feature
 
     
 class st_gcn(nn.Module):
