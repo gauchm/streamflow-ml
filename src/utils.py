@@ -160,7 +160,7 @@ def create_hop_matrix(G, max_hops, node_list):
         
     Returns:
         torch.Tensor of shape (max_hops, #nodes, #nodes), 
-            where entry (i,v,w) is 1 if shortest-path distance from node v to w is i, else 0.
+            where entry (i,v,w) is 1 if shortest-path distance from node v to w is length i, else 0.
     """
     distances = dict(nx.all_pairs_dijkstra_path_length(G))
     hop_matrix = torch.zeros(max_hops, G.number_of_nodes(), G.number_of_nodes(), dtype=torch.int)
@@ -170,6 +170,29 @@ def create_hop_matrix(G, max_hops, node_list):
                 if node_to in distances[node_from].keys() and distances[node_from][node_to] == hop:
                     hop_matrix[hop,i,j] = 1
     return hop_matrix
+
+
+def normalize_hop_matrix(hop_matrix):
+    """Calculates \Lambda^{-1/2}(A+I)\Lambda^{-1/2}, as proposed in https://arxiv.org/pdf/1801.07455.pdf
+    
+    https://arxiv.org/pdf/1801.07455.pdf, sec. 3.6 proposes this normalization of the adjacency matrix.
+    This method extends the idea to kernel sizes larger than one by normalizing each kernel individually.
+    
+    Arguments:
+        adjacency: Adjacency tensor of shape (k, V, V)
+        
+    Returns:
+        Tensor of shape (k, V, V), the normalized matrices.
+    """
+    a = (hop_matrix + hop_matrix[0].unsqueeze(0)).float()
+    a[0] = hop_matrix[0]  # hop_matrix[0] is already diag(1)
+    out = torch.zeros(a.shape)
+    for i in range(a.shape[0]):
+        out[i] = torch.matmul(torch.matmul(torch.diag(torch.rsqrt(a[i].sum(dim=1))), a[i]), 
+                              torch.diag(torch.rsqrt(a[i].sum(dim=1))))
+    
+    return out
+    
 
 
 def random_graph_subsample_with_sources(graph, components, comp_subsample_fraction, p_node_subsample):
@@ -186,21 +209,26 @@ def random_graph_subsample_with_sources(graph, components, comp_subsample_fracti
         p_node_subsample: Probability of node subsampling in each selected component
     
     Returns:
-        list of selected nodes
+        Tuple (list of selected nodes, length of the longest source->sink path in the subsampled components)
     """
     subsampled_components = np.random.choice(components, size=int(comp_subsample_fraction * len(components)), replace=False)
     subsampled_component_nodes = []
+    max_comp_len = 0
     for comp in subsampled_components:
         if np.random.random() < p_node_subsample:
             # select a subgraph, rooted in the component's source nodes
             # start with sources
             subsampled_nodes = [n for n, in_deg in graph.subgraph(['sub' + str(c) for c in comp]).in_degree if in_deg==0]
             subsampled_comp_size = np.random.randint(len(comp))
+            path_len = 0
             while len(subsampled_nodes) < subsampled_comp_size:  # expand neighborhood subsampled_comp_size steps
                 subsampled_nodes += [s for n in subsampled_nodes for s in graph.successors(n)]
+                path_len += 1
             subsampled_component_nodes += subsampled_nodes
+            max_comp_len = max(max_comp_len, path_len)
         else:
             # use all nodes in the component
-            subsampled_component_nodes = ['sub' + str(n) for comp in subsampled_components for n in comp]
+            subsampled_component_nodes += ['sub' + str(n) for n in comp]
+            max_comp_len = max(max_comp_len, len(comp))
             
-    return sorted(int(n[3:]) for n in subsampled_component_nodes)
+    return sorted(int(n[3:]) for n in subsampled_component_nodes), max_comp_len

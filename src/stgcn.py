@@ -20,8 +20,8 @@ class HistoricConv2d(nn.Conv2d):
         
         if type(kernel_size) == int:
             kernel_size = (kernel_size, kernel_size)
-        self.mask = torch.zeros((out_channels, in_channels // groups, kernel_size[0], kernel_size[1]), 
-                                requires_grad=False)
+        self.mask = nn.Parameter(torch.zeros((out_channels, in_channels // groups, kernel_size[0], kernel_size[1])),
+                                 requires_grad=False)
         self.mask[:,:,:kernel_size[0]//2 + 1, :] = 1
         
         
@@ -116,24 +116,18 @@ class Model(nn.Module):
         super().__init__()
 
         # build networks
-        kernel_size = (temporal_kernel_size, spatial_kernel_size)
+        self.kernel_size = (temporal_kernel_size, spatial_kernel_size)
         if adjacency_shape is not None:
             self.data_bn = nn.BatchNorm1d(in_channels * adjacency_shape[1])
         else:
             # No BatchNorm so we remain flexible in the input graph
             self.data_bn = nn.Identity()
         kwargs0 = {k: v for k, v in kwargs.items() if k != 'dropout'}
+        hidden_channels = 4
         self.st_gcn_networks = nn.ModuleList((
-            st_gcn(in_channels, 64, kernel_size, 1, residual=False, **kwargs0),
-            st_gcn(64, 64, kernel_size, 1, **kwargs),
-            st_gcn(64, 64, kernel_size, 1, **kwargs),
-            st_gcn(64, 64, kernel_size, 1, **kwargs),
-            st_gcn(64, 128, kernel_size, 1, **kwargs),
-            st_gcn(128, 128, kernel_size, 1, **kwargs),
-            st_gcn(128, 128, kernel_size, 1, **kwargs),
-            st_gcn(128, 256, kernel_size, 1, **kwargs),
-            st_gcn(256, 256, kernel_size, 1, **kwargs),
-            st_gcn(256, 256, kernel_size, 1, **kwargs),
+            st_gcn(in_channels, hidden_channels, self.kernel_size, 1, residual=False, **kwargs0),
+            st_gcn(hidden_channels, hidden_channels, self.kernel_size, 1, **kwargs),
+            st_gcn(hidden_channels, 1, self.kernel_size, 1, **kwargs),
         ))
         
         # initialize parameters for edge importance weighting
@@ -143,9 +137,9 @@ class Model(nn.Module):
             self.edge_importance = [1] * len(self.st_gcn_networks)
 
         # reduce to one channel for prediction
-        self.out_conv = HistoricConv2d(256, 1, kernel_size=1)
+        #self.out_conv = HistoricConv2d(hidden_channels, 1, kernel_size=1)
 
-    def forward(self, x, A):
+    def forward(self, x, A, max_path_len):
 
         # data normalization
         N, C, T, V = x.size()
@@ -156,12 +150,16 @@ class Model(nn.Module):
         x = x.permute(0, 2, 3, 1).contiguous()
         x = x.view(N, C, T, V)
         
-        # forwad
-        for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
-            x, _ = gcn(x, A * importance)
+        # Spatio-temporal convolution
+        x, _ = self.st_gcn_networks[0](x, A * self.edge_importance[0])
+        # make sure the data form the most upstream subbasin can influence the most downstream one.
+        # max_path_len is the length of the longest source -> sink path.
+        for i in range(max_path_len // self.kernel_size[1]):
+            x, _ = self.st_gcn_networks[1](x, A * self.edge_importance[1])
+        x, _ = self.st_gcn_networks[2](x, A * self.edge_importance[2])
         
         # prediction
-        x = self.out_conv(x)
+        #x = self.out_conv(x)
         return x[:,0,-1,:]  # return first (and only) channel and last time step
 
     def extract_feature(self, x, A):
@@ -220,7 +218,7 @@ class st_gcn(nn.Module):
         assert kernel_size[0] % 2 == 1
         padding = ((kernel_size[0] - 1) // 2, 0)
 
-        self.gcn = ConvTemporalGraphical(in_channels, out_channels, kernel_size[1])
+        self.gcn = ConvTemporalGraphical(in_channels, out_channels, kernel_size[1], t_kernel_size=kernel_size[0], t_padding=padding[0])
 
         self.tcn = nn.Sequential(
             nn.BatchNorm2d(out_channels),
