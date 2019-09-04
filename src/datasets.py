@@ -22,15 +22,18 @@ class RdrsDataset(Dataset):
     Attributes:
         date_start, date_end: First and last date in the dataset
         dates: list of dates in the dataset
-        seq_len, seq_steps: Length and step-size (in hours) of RDRS input variable history for each sample
+        seq_len, seq_steps: Length and step-size (in hours if aggregate_daily is None, else in days) of RDRS input variable history for each sample
         conv_scalers, fc_scalers: sklearn.preprocessing-scalers used to scale time-series and non-time-series input data.
         n_conv_vars, n_fc_vars: Number of time-series and non-time-series input features.
         conv_height, conv_width: Number of rows and columns of the time-series variables
         data_runoff: pd.DataFrame of target streamflow values per date and station
         x_conv, x_fc: Torch tensors of time-series and non-time-series input data
+        fc_var_names: List of x_fc variable names
         y: Torch tensor of target streamflow values
+        y_means: Torch tensor of same length as y. Each entry contains the mean streamflow for the station it corresponds to.
     """
-    def __init__(self, rdrs_vars, seq_len, seq_steps, date_start, date_end, conv_scalers=None, fc_scalers=None, include_months=True):
+    def __init__(self, rdrs_vars, seq_len, seq_steps, date_start, date_end, conv_scalers=None, fc_scalers=None, 
+                 include_months=True, station=None, aggregate_daily=None):
         """Initializes RdrsDataset.
         
         Args:
@@ -42,6 +45,8 @@ class RdrsDataset(Dataset):
             conv_scalers: If provided, will use this list of sklearn.preprocessing scalers to scale the time-series input data.
             fc_scalers: If provided, will use this list of sklearn.preprocessing scalers to scale the non-time-series input data.
             include_months (bool): If True, the time-series input data will contain one-hot-encoded months as features.
+            station (str or bool, optional): If str, will only contain data for this station. If True, will one-hot encode station in x_fc.
+            aggregate_daily (list or None): If provided, will aggregate each RDRS time-series variable to daily values as specified. Allowed values are 'minmax', 'sum'.
         """
         self.date_start = date_start
         self.date_end = date_end
@@ -56,6 +61,27 @@ class RdrsDataset(Dataset):
         self.conv_height = rdrs_data.shape[2]
         self.conv_width = rdrs_data.shape[3]
         
+        if aggregate_daily is not None:
+            self.n_conv_vars += sum(1 for agg in aggregate_daily if agg == 'minmax')
+            rdrs_time_index_daily = pd.Series(pd.date_range(rdrs_time_index.min().date(), rdrs_time_index.max().date(), freq='D'))
+            rdrs_daily = np.zeros((len(rdrs_time_index), self.n_conv_vars, self.conv_height, self.conv_width))
+            for j in range(len(rdrs_time_index_daily)):
+                day_indices = rdrs_time_index[rdrs_time_index.dt.date == rdrs_time_index_daily.dt.date[j]].index.values
+                i_new = 0
+                for i in range(len(rdrs_vars)):                
+                    day_data = rdrs_data[day_indices,i,:,:]
+                    if aggregate_daily[i] == 'sum':
+                        rdrs_daily[j,i_new,:,:] = day_data.sum(axis=0)
+                    elif aggregate_daily[i] == 'minmax':
+                        rdrs_daily[j,i_new,:,:] = day_data.min(axis=0)
+                        rdrs_daily[j,i_new + 1,:,:] = day_data.max(axis=0)
+                        i_new += 1
+                    else:
+                        raise Exception('Invalid aggregation method')
+                    i_new += 1
+            rdrs_time_index = rdrs_time_index_daily
+            rdrs_data = rdrs_daily
+        
         data_streamflow = load_data.load_discharge_gr4j_vic()
         data_streamflow = data_streamflow[~pd.isna(data_streamflow['runoff'])]
         if include_months:
@@ -63,6 +89,10 @@ class RdrsDataset(Dataset):
         data_streamflow = data_streamflow[(data_streamflow['date'] >= self.date_start) & (data_streamflow['date'] <= self.date_end)]
         gauge_info = pd.read_csv(module_dir + '/../data/gauge_info.csv')[['ID', 'Lat', 'Lon']]
         data_streamflow = pd.merge(data_streamflow, gauge_info, left_on='station', right_on='ID').drop('ID', axis=1)
+        if type(station) == str:
+            data_streamflow = data_streamflow[data_streamflow['station']==station].reset_index(drop=True)
+        elif type(station) == bool and station:
+            data_streamflow = data_streamflow.join(pd.get_dummies(data_streamflow['station'], prefix='station'))
         
         # sort by date then station so that consecutive values have increasing dates (except for station cutoffs)
         # this way, a stateful lstm can be fed date ranges.
@@ -77,7 +107,11 @@ class RdrsDataset(Dataset):
         i = 0
         for date in self.dates:
             # For each day that is to be predicted, cut out a sequence that ends with that day's 23:00 and is seq_len long
-            end_of_day_index = rdrs_time_index[rdrs_time_index == date].index.values[0] + 23
+            if aggregate_daily is None:
+                end_of_day_index = rdrs_time_index[rdrs_time_index == date].index.values[0] + 23
+            else:
+                end_of_day_index = rdrs_time_index[rdrs_time_index == date].index.values[0]
+            
             self.x_conv[i,:,:,:,:] = rdrs_data[end_of_day_index - (self.seq_len * self.seq_steps) : end_of_day_index : self.seq_steps]
             i += 1
 
@@ -89,19 +123,21 @@ class RdrsDataset(Dataset):
                                                    .reshape(self.x_conv[:,:,i,:,:].shape))
 
         self.x_fc = data_streamflow.drop(['date', 'station', 'runoff'], axis=1).to_numpy()
-        fc_var_names = data_streamflow.drop(['date', 'station', 'runoff'], axis=1).columns
-        vars_to_scale = list(c for c in fc_var_names if not c.startswith('month'))
-        self.n_fc_vars = len(fc_var_names)
+        self.fc_var_names = data_streamflow.drop(['date', 'station', 'runoff'], axis=1).columns
+        vars_to_scale = list(c for c in self.fc_var_names if not c.startswith('month') and not c.startswith('station'))
+        self.n_fc_vars = len(self.fc_var_names)
         if self.fc_scalers is None:
             self.fc_scalers = list(preprocessing.StandardScaler() for _ in range(self.n_fc_vars))
         for i in range(self.n_fc_vars):
-            if fc_var_names[i] in vars_to_scale:
-                to_transform = data_streamflow[fc_var_names[i]].to_numpy().reshape((-1,1))
+            if self.fc_var_names[i] in vars_to_scale:
+                to_transform = data_streamflow[self.fc_var_names[i]].to_numpy().reshape((-1,1))
                 self.x_fc[:,i] = np.nan_to_num(self.fc_scalers[i].fit_transform(to_transform).reshape(self.x_fc[:,i].shape))
         
         self.x_conv = torch.from_numpy(self.x_conv).float()
         self.x_fc = torch.from_numpy(self.x_fc).float()
         self.y = torch.from_numpy(data_streamflow['runoff'].to_numpy()).float()
+        self.y_means = torch.from_numpy(data_streamflow.join(data_streamflow.groupby('station')['runoff'].mean(), 
+                                                             on='station', rsuffix='_mean')['runoff_mean'].to_numpy()).float()
         
     def __getitem__(self, index):
         """Fetches a sample of input/target values.
@@ -109,14 +145,15 @@ class RdrsDataset(Dataset):
         Args:
             index (int): Index of the sample.
         Returns:
-            A dict containing: 'x_conv' -> tensor of shape (#timesteps, #n_conv_vars, #rows, #cols), 'x_fc' -> tensor of shape (n_fc_vars), 'y' -> Tensor of target streamflow values.
+            A dict containing: 'x_conv' -> tensor of shape (#timesteps, #n_conv_vars, #rows, #cols), 'x_fc' -> tensor of shape (n_fc_vars), 
+                               'y' -> Tensor of target streamflow value, 'y_mean' -> Tensor of mean streamflow for the corresponding station.
         """
         date_of_index = self.data_runoff.iloc[index]['date']
         x_conv_index = np.argmax(self.dates == date_of_index)
         
         return {'x_conv': self.x_conv[x_conv_index,:,:,:,:], 
                 'x_fc': self.x_fc[index,:],
-                'y': self.y[index]}
+                'y': self.y[index], 'y_mean': self.y_means[index]}
     
     def __len__(self):
         """Returns the number of samples in the dataset."""
@@ -166,7 +203,7 @@ class RdrsGridDataset(Dataset):
     Attributes:
         date_start, date_end: First and last date in the dataset
         dates: list of dates in the dataset
-        seq_len, seq_steps: Length and step-size (in hours) of RDRS input variable history for each sample
+        seq_len, seq_steps: Length and step-size (in hours if aggregate_daily is None, else in days) of RDRS input variable history for each sample
         conv_scalers: sklearn.preprocessing-scalers used to scale time-series and non-time-series input data.
         include_simulated_streamflow: Determines whether the dataset contains simulated streamflow for virtual gauges of all subbasins.
         n_conv_vars: Number of time-series input features.
