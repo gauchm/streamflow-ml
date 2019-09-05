@@ -149,7 +149,7 @@ class RdrsDataset(Dataset):
                                'y' -> Tensor of target streamflow value, 'y_mean' -> Tensor of mean streamflow for the corresponding station.
         """
         date_of_index = self.data_runoff.iloc[index]['date']
-        x_conv_index = np.argmax(self.dates == date_of_index)
+        x_conv_index = np.argmax(pd.to_datetime(self.dates) == date_of_index)
         
         return {'x_conv': self.x_conv[x_conv_index,:,:,:,:], 
                 'x_fc': self.x_fc[index,:],
