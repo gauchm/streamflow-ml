@@ -41,8 +41,23 @@ LSTM_VIC
             Tensorboard: runs/Jul03_08-36-27_gra833, slurm-16746337.out, pickle/results,models/LSTM_VIC_20190703-083627.pkl
         - running on a sample of stations, initializing hidden state before every batch (in training as well as validation and test predictions) LSTM->Linear, dropout=0, hidden layer size=20, batch_size=1, lr=2e-3, weight_decay = 2e-5, epochs=300, patience=100, min_improvement=.05, monitoring validation-mse, seq_len=5*24, with month as feature (one-hot): 2014-01-01 - 2014-12-31 Median NSE -0.06778762672811722
             Tensorboard: runs/Jul03_13-46-23_gra937, slurm-16758972.out, pickle/results,models/LSTM_VIC_20190703-134623.pkl
-        - running on a sample of stations, without shuffling and with initializing hidden state only once before every epoch (but not between batches or before validation/test predictions). LSTM->Linear, dropout=0, hidden layer size=20, batch_size=1, lr=2e-3, weight_decay = 2e-5, epochs=300, patience=100, min_improvement=.05, monitoring validation-mse, seq_len=7*24, with month as feature (one-hot): 2014-01-01 - 2014-12-31 Median NSE .
-            Tensorboard: runs/, slurm-16771756.out, pickle/results,models/
+        - running on a sample of stations, without shuffling and with initializing hidden state only once before every epoch (but not between batches or before validation/test predictions). LSTM->Linear, dropout=0, hidden layer size=20, batch_size=1, lr=2e-3, weight_decay = 2e-5, epochs=300, patience=100, min_improvement=.05, monitoring validation-mse, seq_len=7*24, with month as feature (one-hot): 2014-01-01 - 2014-12-31 slurm-16771756.out -> failed.
+        - ff19a34 re-implemented to use dataloader: median NSE: .12598211555350336 slurm-2688834.out Sep04_22-15-25_blg5502.int.ets1.calculquebec.ca LSTM_VIC_20190904-221524.pkl
+        - 22d6753 all variables, include month, NSELoss: NSE .20949725190927354 slurm-2710711.out Sep06_08-30-49_blg5805.int.ets1.calculquebec.ca LSTM_VIC_20190906-083049.pkl
+        
+LSTM_VIC-oneModel: train one model on all stations, with one-hot-encoded station identifiers
+    - ea02705 hourly: median NSE -0.025973301453157904 slurm-2688685.out Sep04_21-55-32_blg5808.int.ets1.calculquebec.ca LSTM_VIC-oneModel_20190904-215419.pkl
+        - larger net, longer training: NSE .04042228381339413 slurm-2694504.out Sep05_10-21-15_blg5301.int.ets1.calculquebec.ca LSTM_VIC-oneModel_20190905-101954.pkl
+        - larger net, lr-scheduling: slurm-2694518.out Sep05_10-29-46_blg5508.int.ets1.calculquebec.ca -> timeout, took last saved model and manually tested on tuna: NSE .0453082591803432 LSTM_VIC-oneModel_20190905-102831.pkl
+        - 14d5d34 larger net, larger batchsize: slurm-2694522.out Sep05_10-28-11_blg5406.int.ets1.calculquebec.ca -> timeout, took last saved model (~epoch 730) and manually tested on tuna: NSE .1800957638441691 LSTM_VIC-oneModel_20190905-102708.pkl
+    - hourly, all variables: slurm-2693119.out Sep05_08-08-31_blg5805.int.ets1.calculquebec.ca -> timeout, took last saved model and manually tested on tuna: NSE -0.04675339312257787 LSTM_VIC-oneModel_20190905-080423.pkl
+    - day-aggregated, small net: median NSE -0.016464038662668434 slurm-2688688.out Sep04_21-56-58_blg5804.int.ets1.calculquebec.ca LSTM_VIC-oneModel_20190904-215514.pkl
+        - similar to 2688688 but larger net, longer history: median NSE: .008578019277858506 slurm-2692481.out Sep05_07-50-42_blg5106.int.ets1.calculquebec.ca LSTM_VIC-oneModel_20190905-074841.pkl
+        - all variables: slurm-2693117.out Sep05_08-01-29_blg5308.int.ets1.calculquebec.ca -> timeout, but loss didn't decrease anyways.
+    - hourly, MSELoss: median NSE: -2.2722158567930935 slurm-2688837.out Sep04_22-17-29_blg4509.int.ets1.calculquebec.ca LSTM_VIC-oneModel_20190904-221616.pkl -> MSELoss gives very spikey predicitons
+    - hourly, all variables, seq_len=5*24, seq_steps=4, NSELoss: slurm-2693191.out Sep05_08-21-28_blg5308.int.ets1.calculquebec.ca -> timeout, but loss didn't decrease anyways.
+    - hourly, precp+temp, seq_len=5*24, small batchsize: slurm-2714456.out Sep06_11-15-54_blg5709.int.ets1.calculquebec.ca -> very slow, high loss, cancelled.
+        - same but large batchsize: NSE -0.014668987463184124 slurm-2714446.out Sep06_11-15-55_blg5708.int.ets1.calculquebec.ca LSTM_VIC-oneModel_20190906-111433.pkl
                 
 LSTM_VIC_CV
     - train on 2012-01 - 2012-12, predict 2013-01; ...; train on 2012-01 - 2013-11, predict 2013-12
@@ -60,7 +75,16 @@ XGBoost_VIC
                 - 98be722 run again, with all forcing vars: 2013-01-01 - 2014-12-31 Median NSE: .4671021362093697 pickle/results,models/XGBoost_VIC_aggregateForcings_20190706-115444.pkl
 
 XGBoost_VIC-oneModel
-    - ebea317 RandomSearchCV training one model for all stations: 2013-01-01 - 2013-12-31 Median NSE: .4166909807609099 pickle/results,models/XGBoost_VIC_aggregateForcings_oneModel_20190708-203652.pkl
+    - ebea317 RandomSearchCV training one model for all stations: 2013-01-01 - 2014-12-31 Median NSE: .4166909807609099 pickle/results,models/XGBoost_VIC_aggregateForcings_oneModel_20190708-203652.pkl
+    - f9259ea RandomSearchCV at high learning rate, searching for good tree parameters.
+    - 729aa5a tuned lr and regularization parameters using best parameters from f9259ea: NSE .4722345372406194 XGBoost_VIC_aggregateForcings_oneModel_20190906-140352.pkl
+    - 47fea4d tune subsample, using best parameters from f9259ea and 729aa5a: NSE .4934337194476772 XGBoost_VIC_aggregateForcings_oneModel_20190908-081744.pkl
+    
+XGBoost_VIC-oneModel-NSELoss:
+    - 44c02e7 train using custom NSE objective, random parameter search with high LR: NSE .2940506825478112 XGBoost_VIC_aggregateForcings_oneModel-NSELoss_20190908-103648.pkl
+    - ba82ac8 tune lr and regularization parameters using best parameters from 44c02e7: NSE .4139680408331431 XGBoost_VIC_aggregateForcings_oneModel-NSELoss_20190909-072525.pkl
+    - 83eaf94 tune subsample, using best params from 44c02e7 and ba82ac8: NSE .4277093467555162 XGBoost_VIC_aggregateForcings_oneModel-NSELoss_20190909-174938.pkl
+    - d1c6fb3 train until converged using best parameters from 83eaf94: NSE .4343924974394233 XGBoost_VIC_aggregateForcings_oneModel-NSELoss_20190909-184940.pkl
 
 XGBoost_VIC_CV
     - 8dbc320 Use model parameters found in 5249f7c and do CV to obtain one median NSE per year. NSE 2010: .3016653537016454, 2011: .48630642833492554, 2012: .17389750812778548, 2013: .5805734607325083, 2014: .4297931994544186
@@ -199,6 +223,9 @@ ConvLSTM_withLandcover
     - 4fc96f3 feed all timesteps into conv-layer, day-aggregated, use month, resample input: median NSE: .3875646680316176 slurm-2276953.out Aug13_08-57-18_blg5509.int.ets1.calculquebec.caConvLSTM_withLandcover ConvLSTM_withLandcover_20190813-085459.pkl
     - same as 4fc96f3 but use DEM instead of landcover (at 34x39 resolution): median NSE: .328311620792451 slurm-2279513.out Aug13_11-03-06_blg5807.int.ets1.calculquebec.caConvLSTM_withLandcover ConvLSTM_withLandcover_20190813-110104.pkl
     - a1c938f same as 2279513 but DEM and landcover: median NSE: .3941596416482675 slurm-2279716.out Aug13_11-13-44_blg5304.int.ets1.calculquebec.caConvLSTM_withLandcover ConvLSTM_withLandcover_20190813-111128.pkl
+    - hourly, no geophysical data, but onehot-station-identifier: NSE .10345615220194604 slurm-2702811.out Sep05_17-37-14_blg5105.int.ets1.calculquebec.caConvLSTM_withLandcover ConvLSTM_withLandcover_20190905-173455.pkl
+    - 0f1440d daily, no geophysical data, but onehot-station-identifier: NSE .3102412869109235 slurm-2695547.out Sep05_11-18-18_blg5501.int.ets1.calculquebec.caConvLSTM_withLandcover 
+        - 0e135bb larger net, smaller batches: median NSE .4265476898484704 slurm-2695878.out Sep05_12-01-46_blg7538.int.ets1.calculquebec.caConvLSTM_withLandcover ConvLSTM_withLandcover_20190905-115932.pkl
         
 ConvLSTM_withLandcover_generalizationTest
     - 34497e7 configuration as 7924dc0, but train on subset, test on rest (25%) of stations. Training still 2010-2012, test 2013-2014: 2013-2014 median NSE: test_stations: .31133489657275226 train_stations: .37047758246860063 -> 04207200 is very bad, but 04208504 which is very close, maybe even same grid cell, is very good. So problem is that two stations in one grid cell have different characteristics. slurm-1962958.out  Jul27_10-18-23_blg5401.int.ets1.calculquebec.ca ConvLSTM_withLandcover_generalizationTest_20190727-101522.pkl
@@ -309,4 +336,4 @@ STGCN_stationTraining:
         - same as 2505056 but no lr-scheduling: NSE .17289834721946107 slurm-2505585.out Aug24_20-56-50_blg5208.int.ets1.calculquebec.caSTGCN_stationTraining 
         - 6732064 same as but no lr-stepping, longer training, less weight_decay: NSE .20097597013664603 slurm-2505957.out Aug24_21-04-25_blg5607.int.ets1.calculquebec.caSTGCN_stationTraining STGCN_stationTraining_20190824-210357.pkl
     - seq_len 14, no geophysical data, from scratch: median NSE .26884894920078894 slurm-2521134.out Aug25_19-38-00_blg5103.int.ets1.calculquebec.caSTGCN_stationTraining STGCN_stationTraining_20190825-193737.pkl
-    - try the STGCN that has restricted temporal convolution and reuses one st_gcn-layer: median NSE: .3441675021707803 slurm-2622421.out Aug30_21-42-30_blg5709.int.ets1.calculquebec.caSTGCN_stationTraining STGCN_stationTraining_20190830-214200.pkl
+    - 05bdacb try the STGCN that has restricted temporal convolution and reuses one st_gcn-layer: median NSE: .3441675021707803 slurm-2622421.out Aug30_21-42-30_blg5709.int.ets1.calculquebec.caSTGCN_stationTraining STGCN_stationTraining_20190830-214200.pkl
