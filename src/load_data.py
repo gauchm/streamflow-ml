@@ -53,6 +53,31 @@ def load_discharge_gr4j_vic():
     return data_streamflow
 
 
+def load_grip_gl_discharge():
+    """Loads observed discharge for (calibration) gauging stations in GRIP-GL objective 1 & 2.
+    
+    Returns:
+        A pd.DataFrame with columns [date, station, qobs], where 'qobs' contains the streamflow.
+    """
+    files = [module_dir + '/../data/grip-gl/grip-gl-calibration-obj1-all_gauges.nc',
+             module_dir + '/../data/grip-gl/grip-gl-calibration-obj2-all_gauges.nc']
+    
+    data_streamflow = None
+    for f in files:
+        q_nc = nc.Dataset(f, 'r')
+        stations = q_nc['station_id'][:]
+        time = nc.num2date(q_nc['time'][:], q_nc['time'].units, q_nc['time'].calendar)
+        data = pd.DataFrame(q_nc['Q'][:].T, index=time, columns=stations)
+        if data_streamflow is None:
+            data_streamflow = data
+        else:
+            data = data[[s for s in stations if s not in data_streamflow.columns]]
+            data_streamflow = data_streamflow.join(data)
+    
+    return data_streamflow.loc['2000-01-01':'2016-12-31'].unstack().reset_index()\
+            .rename({'level_0': 'station', 'level_1': 'date', 0: 'qobs'}, axis=1).set_index('date')
+
+
 def load_simulated_streamflow(lats=None, lons=None):
     """Loads VIC-GRU+Raven streamflow simulation for all subbasins.
     
@@ -139,6 +164,53 @@ def load_rdrs_forcings(as_grid=False, include_lat_lon=False):
 
         rdrs_nc.close()
         return rdrs_data
+    
+    
+def load_wfdei_gem_capa_forcings(as_grid=False, include_lat_lon=False):
+    """Loads WFDEI-GEM-CaPA forcings.
+    
+    Loads hourly meteorological WFDEI-GEM-CaPA forcings.
+    
+    Args:
+        as_grid (bool): If False, will flatten returned forcing rows and columns into columns. 
+        include_lat_lon (bool): If True and as_grid is True, will additionally return latitudes and longitudes of the forcing dataset.
+    Returns:
+        If not as_grid: A pd.DataFrame with dates as index and one column per variable and forcing grid cell
+        If as_grid: 
+            A np.ndarray of shape (#timesteps, #vars, #rows, #cols) of forcing data
+            A list of length #vars of variable names
+            A pd.date_range of length #timesteps, and (if specified) lat and lon arrays)
+            If include_lat_lon: An array of length #rows of latitudes and an array of length #cols of longitudes.
+    """
+    forcing_variables = ['hus', 'pr', 'ps', 'rlds', 'rsds_thresholded', 'wind_speed', 'ta']
+    forcing_nc = nc.Dataset('/tuna1/scratch/mgauch/data/grip/grip-gl_wfdei-gem-capa_2000-2016_leap.nc', 'r')
+    
+    if as_grid:
+        time_steps, nrows, ncols = forcing_nc[forcing_variables[0]].shape
+        forcing_data = np.zeros((time_steps, len(forcing_variables), nrows, ncols))
+        for i in range(len(forcing_variables)):
+            forcing_data[:,i,:,:] = forcing_nc[forcing_variables[i]][:]
+        
+        if include_lat_lon:
+            return_values = (forcing_data, forcing_variables, pd.Series(pd.date_range('1999-12-31 18:00', '2016-12-31 15:00', freq='3H')),
+                             forcing_nc['lat'][:], forcing_nc['lon'][:])
+        else:
+            return_values = forcing_data, forcing_variables, pd.Series(pd.date_range('1999-12-31 18:00', '2016-12-31 15:00', freq='3H'))
+        forcing_nc.close()
+        return return_values
+    else:
+        # Using 18:00/15:00 because forcings are UTC, while streamflow is local time (we shift 6h back so it aligns with the 3h-steps)
+        forcing_data = pd.DataFrame(index=pd.date_range('1999-12-31 18:00', '2016-12-31 15:00', freq='3H'))
+
+        for var in forcing_variables:
+            var_data = pd.DataFrame(forcing_nc[var][:].reshape(49680,86*171))
+            var_data.columns = [var + '_' + str(c) for c in var_data.columns]
+            forcing_data.reset_index(drop=True, inplace=True)
+            forcing_data = forcing_data.reset_index(drop=True).join(var_data.reset_index(drop=True))
+        forcing_data.index = pd.date_range('1999-12-31 18:00', '2016-12-31 15:00', freq='3H')
+
+        forcing_nc.close()
+        return forcing_data
 
 
 def pickle_results(name, results, time_stamp):
